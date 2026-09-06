@@ -250,14 +250,20 @@ export default function humanExpectations(pi: ExtensionAPI) {
         if (ctx.hasUI) ctx.ui.notify(`Explicit ${bootstrap ? 'backfill' : 'review'} started: ${status.pending} pending inputs. Live ledger: .human-expectations/BACKFILL.md; progress in the status line; sources stay safe if you stop.`, 'info');
         await ledger(ctx, `| 0 | ${status.pending} | ${status.expectations} | $0.00 | 0 min |`, true);
         const inFlight = new Set<string>();
-        let batchNumber = 0;
+        let batchNumber = 0, gate: Promise<unknown> = Promise.resolve();
         const oneBatch = async (): Promise<boolean> => {
           if (abort.signal.aborted || stopped) return false;
-          const n = ++batchNumber;
-          progress(`expectations ${bootstrap ? 'backfill' : 'review'}: batch ${n} (${inFlight.size + 1} in flight) · ${status.pending} pending of ${startedPending} · $${((status.recordedCost || 0) - startedCost).toFixed(2)} · ${Math.round((Date.now() - startedAt) / 60000)} min`);
-          const batch = await job(ctx, { op: 'prepare', since, exclude: [...inFlight], ...(bootstrap ? { maxInputs: 120, maxBytes: Math.min(650000, Math.floor((model.contextWindow || 128000) * 0.6)) } : {}) });
+          // Picking a batch and claiming its inputs is serialised; only the model calls overlap.
+          const picked = gate.then(async () => {
+            const batch = await job(ctx, { op: 'prepare', since, exclude: [...inFlight], ...(bootstrap ? { maxInputs: 120, maxBytes: Math.min(650000, Math.floor((model.contextWindow || 128000) * 0.6)) } : {}) });
+            const mine = batch.inputs.map((i: { ref: string }) => batch.references?.[i.ref] || i.ref); for (const r of mine) inFlight.add(r);
+            return { batch, mine };
+          });
+          gate = picked.catch(() => {});
+          const { batch, mine } = await picked;
           if (!batch.inputs.length) return false;
-          const mine = batch.inputs.map((i: { ref: string }) => batch.references?.[i.ref] || i.ref); for (const r of mine) inFlight.add(r);
+          const n = ++batchNumber;
+          progress(`expectations ${bootstrap ? 'backfill' : 'review'}: batch ${n} (${inFlight.size} inputs in flight) · ${status.pending} pending of ${startedPending} · $${((status.recordedCost || 0) - startedCost).toFixed(2)} · ${Math.round((Date.now() - startedAt) / 60000)} min`);
           try { await runBatch(batch, n); } finally { for (const r of mine) inFlight.delete(r); }
           return true;
         };
