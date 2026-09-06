@@ -216,10 +216,10 @@ export default function humanExpectations(pi: ExtensionAPI) {
   });
 
   // ---- Explicit, user-invoked passes. These DO make separate model requests and say so. ----
-  async function estimate(ctx: ExtensionContext, bootstrap: boolean) {
+  async function estimate(ctx: ExtensionContext, bootstrap: boolean, since?: string) {
     const model = ctx.model; if (!model) throw Error('Select a model before estimating');
     const status = await job(ctx, { op: 'status' });
-    const batch = await job(ctx, { op: 'prepare', ...(bootstrap ? { maxInputs: 120, maxBytes: Math.min(650000, Math.floor((model.contextWindow || 128000) * 0.6)) } : {}) });
+    const batch = await job(ctx, { op: 'prepare', since, ...(bootstrap ? { maxInputs: 120, maxBytes: Math.min(650000, Math.floor((model.contextWindow || 128000) * 0.6)) } : {}) });
     const perBatch = Math.max(1, batch.inputs.length), bytes = Buffer.byteLength(JSON.stringify(batch));
     const batches = bootstrap ? Math.ceil(status.pending / perBatch) : Math.min(1, status.pending);
     const inTokens = Math.round(bytes / 4) * batches, outTokens = Math.round(perBatch * 180) * batches;
@@ -232,7 +232,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
     const dir = join(project(ctx), '.human-expectations'); await mkdir(dir, { recursive: true, mode: 0o700 });
     await appendFile(join(dir, 'BACKFILL.md'), (header ? `\n# Backfill ${new Date().toISOString()}\n\n| batch | inputs left | expectations | cost so far | elapsed |\n|---|---|---|---|---|\n` : '') + line + '\n', { mode: 0o600 });
   }
-  async function explicitPass(ctx: ExtensionContext, bootstrap: boolean, file?: string, since?: string) {
+  async function explicitPass(ctx: ExtensionContext, bootstrap: boolean, file?: string, since?: string, parallel = 1) {
     if (active) throw Error('Expectation update already running in this session');
     controller = new AbortController();
     const abort = controller;
@@ -249,11 +249,19 @@ export default function humanExpectations(pi: ExtensionAPI) {
         const startedPending = status.pending, startedAt = Date.now(), startedCost = status.recordedCost || 0;
         if (ctx.hasUI) ctx.ui.notify(`Explicit ${bootstrap ? 'backfill' : 'review'} started: ${status.pending} pending inputs. Live ledger: .human-expectations/BACKFILL.md; progress in the status line; sources stay safe if you stop.`, 'info');
         await ledger(ctx, `| 0 | ${status.pending} | ${status.expectations} | $0.00 | 0 min |`, true);
-        for (let batchNumber = 0; batchNumber < (bootstrap ? 400 : 1); batchNumber++) {
-          if (abort.signal.aborted || stopped) break;
-          progress(`expectations ${bootstrap ? 'backfill' : 'review'}: batch ${batchNumber + 1} · ${status.pending} pending of ${startedPending} · $${((status.recordedCost || 0) - startedCost).toFixed(2)} · ${Math.round((Date.now() - startedAt) / 60000)} min`);
-          const batch = await job(ctx, { op: 'prepare', since, ...(bootstrap ? { maxInputs: 120, maxBytes: Math.min(650000, Math.floor((model.contextWindow || 128000) * 0.6)) } : {}) });
-          if (!batch.inputs.length) break;
+        const inFlight = new Set<string>();
+        let batchNumber = 0;
+        const oneBatch = async (): Promise<boolean> => {
+          if (abort.signal.aborted || stopped) return false;
+          const n = ++batchNumber;
+          progress(`expectations ${bootstrap ? 'backfill' : 'review'}: batch ${n} (${inFlight.size + 1} in flight) · ${status.pending} pending of ${startedPending} · $${((status.recordedCost || 0) - startedCost).toFixed(2)} · ${Math.round((Date.now() - startedAt) / 60000)} min`);
+          const batch = await job(ctx, { op: 'prepare', since, exclude: [...inFlight], ...(bootstrap ? { maxInputs: 120, maxBytes: Math.min(650000, Math.floor((model.contextWindow || 128000) * 0.6)) } : {}) });
+          if (!batch.inputs.length) return false;
+          const mine = batch.inputs.map((i: { ref: string }) => batch.references?.[i.ref] || i.ref); for (const r of mine) inFlight.add(r);
+          try { await runBatch(batch, n); } finally { for (const r of mine) inFlight.delete(r); }
+          return true;
+        };
+        const runBatch = async (batch: any, n: number) => {
           const { references: _references, ...reviewInput } = batch;
           let repair: { validationError: string; rejectedOutput: string } | undefined;
           for (let attempt = 0; attempt < 2; attempt++) {
@@ -271,7 +279,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
               const result = decodeOutput(text);
               if (abort.signal.aborted || stopped) throw Error('Extraction cancelled; sources remain pending');
               status = await job(ctx, { op: 'apply', batch, result, run });
-              await ledger(ctx, `| ${batchNumber + 1} | ${status.pending} | ${status.expectations} | $${((status.recordedCost || 0) - startedCost).toFixed(2)} | ${Math.round((Date.now() - startedAt) / 60000)} min |`);
+              await ledger(ctx, `| ${n} | ${status.pending} | ${status.expectations} | $${((status.recordedCost || 0) - startedCost).toFixed(2)} | ${Math.round((Date.now() - startedAt) / 60000)} min |`);
               break;
             } catch (error) {
               await job(ctx, { op: 'error', message: String(error), run, rejectedOutput: text });
@@ -279,7 +287,10 @@ export default function humanExpectations(pi: ExtensionAPI) {
               repair = { validationError: String(error), rejectedOutput: text };
             }
           }
-        }
+        };
+        const limit = bootstrap ? 400 : 1;
+        const workers = Array.from({ length: bootstrap ? parallel : 1 }, async () => { while (batchNumber < limit && await oneBatch()) { /* next */ } });
+        await Promise.all(workers);
         if (!abort.signal.aborted && !stopped && status.pending === 0) { progress('expectations: consolidating the outcome hierarchy'); status = await consolidateExplicit(ctx, abort.signal) || status; }
         progress(undefined as any);
         await ledger(ctx, `| done | ${status.pending} | ${status.expectations} | $${((status.recordedCost || 0) - startedCost).toFixed(2)} | ${Math.round((Date.now() - startedAt) / 60000)} min |`);
@@ -327,7 +338,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
       const words = prefix.split(/\s+/);
       if (words.length > 1) {
         const verb = words[0], tail = words.at(-1) || '';
-        const options = (verb === 'report' ? ['this', 'full', 'recheck', '--project'] : verb === 'on' ? ['--global', '--project', '--budget', '30', '60'] : verb === 'off' ? ['--global', '--project'] : verb === 'bootstrap' || verb === 'review' ? ['--estimate', '--yes', '--since', '--project'] : ['--project']);
+        const options = (verb === 'report' ? ['this', 'full', 'recheck', '--project'] : verb === 'on' ? ['--global', '--project', '--budget', '30', '60'] : verb === 'off' ? ['--global', '--project'] : verb === 'bootstrap' || verb === 'review' ? ['--estimate', '--yes', '--since', '--parallel', '--project'] : ['--project']);
         const items = options.filter(o => o.startsWith(tail)).map(o => ({ value: `${words.slice(0, -1).join(' ')} ${o}`, label: o }));
         return items.length ? items : null;
       }
@@ -379,14 +390,15 @@ export default function humanExpectations(pi: ExtensionAPI) {
           show(ctx, await collect(ctx, rest.length ? rest.join(' ') : undefined));
         } else if (action === 'review' || action === 'bootstrap') {
           const si = rest.indexOf('--since'); const since = si >= 0 ? new Date(rest.splice(si, 2)[1]).toISOString() : undefined;
+          const pi_ = rest.indexOf('--parallel'); const parallel = pi_ >= 0 ? Math.max(1, Math.min(4, Number(rest.splice(pi_, 2)[1]) || 1)) : 1;
           const file = rest.filter(w => !w.startsWith('--')).join(' ') || undefined;
           if (file) await collect(ctx, file); // an explicit transcript is read first, so the estimate covers it
-          const est = await estimate(ctx, action === 'bootstrap');
+          const est = await estimate(ctx, action === 'bootstrap', since);
           if (rest.includes('--estimate')) { show(ctx, est.text); return; }
           if (!est.pending) { show(ctx, 'Nothing pending.'); return; }
           const go = !ctx.hasUI || rest.includes('--yes') || await ctx.ui.confirm(`Start ${action}?`, est.text);
           if (!go) { show(ctx, 'Not started.'); return; }
-          show(ctx, await explicitPass(ctx, action === 'bootstrap', file, since));
+          show(ctx, await explicitPass(ctx, action === 'bootstrap', file, since, parallel));
         } else if (action === 'report') {
           const arg = rest[0];
           if (arg === 'this' || (arg && /^[0-9a-f]{8}/.test(arg) && !/^(HE|GX)-/.test(arg))) {

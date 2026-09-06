@@ -192,7 +192,8 @@ export function exchange(state, item) {
     before, after, contextPending: after.length === 0 };
 }
 
-export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = false, since = null) {
+export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = false, since = null, exclude = []) {
+  const excluded = new Set(exclude);
   const batch = []; let oversized = 0;
   // The known-outcome index rides with every batch; inputs fill the room that remains.
   const full = e => ({ id: e.id, title: e.title, intent: e.intent, kind: e.kind, supersededBy: e.supersededBy,
@@ -213,7 +214,7 @@ export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = fals
   if (compact ? indexBytes > 40000 : indexBytes > maxBytes * 0.8) throw Error(`Expectation index (${indexBytes} bytes) exceeds the review budget (${maxBytes}); use a larger-context model or consolidate the catalogue`);
   let bytes = compact ? 0 : indexBytes;
   const originByEntry = new Map(state.inputs.map(i => [JSON.stringify([i.entry, i.timestamp]), i.origin]));
-  const pending = state.inputs.filter(i => (!i.decision || i.decision.pendingIntent) && (!since || i.timestamp >= since)), missed = new Set(state.lastBatch?.missingRefs || []);
+  const pending = state.inputs.filter(i => (!i.decision || i.decision.pendingIntent) && (!since || i.timestamp >= since) && !excluded.has(i.ref)), missed = new Set(state.lastBatch?.missingRefs || []);
   const retry = pending.filter(i => missed.has(i.ref));
   for (const i of (retry.length ? retry : pending)) {
     // Routed messages need attribution, not extraction of requirements allegedly spoken by an agent.
@@ -236,7 +237,12 @@ export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = fals
 
 /** Structural validation does not certify semantic MECE or human identity. Those remain explicit judgments. */
 export function reconcile(state, batch, result) {
-  if (batch.revision !== state.revision) throw Error('Stale review; preserve pending inputs and retry against current state');
+  // Parallel explicit batches: an older revision is acceptable as long as every input in this batch is still pending.
+  if (batch.revision !== state.revision) {
+    const stillPending = new Set(state.inputs.filter(i => !i.decision || i.decision.pendingIntent).map(i => i.ref));
+    const refs = batch.inputs.map(x => batch.references?.[x.ref] || x.ref);
+    if (batch.revision > state.revision || refs.some(r => !stillPending.has(r))) throw Error('Stale review; preserve pending inputs and retry against current state');
+  }
   const resolveRef = ref => batch.references?.[ref] || ref;
   result = expandCompact(result, state, resolveRef);
   if (!Array.isArray(result.decisions) || !Array.isArray(result.expectations)) throw Error('Return expectation patches and a classification for every input');
