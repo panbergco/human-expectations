@@ -2,7 +2,9 @@
 
 **Your agent should remember what you meant, without making you repeat yourself.**
 
-Long projects span many conversations. Requests get forgotten, corrections get lost, and “done” can mean little more than someone said it was done. Human Expectations keeps a shared project record of what you asked for, how your intent changed, and what has actually been verified.
+Human prompts are the scarcest, most expensive signal in an agent system. Long agent runs lose them: requests get buried between tool output and assistant text, half-implemented, or silently dropped — and the human has no ledger of their own asks to hold the system to account.
+
+Human Expectations keeps that ledger: a shared project record of what you asked for, how your intent changed, and what has actually been verified — so “done” means more than someone said it was done.
 
 > **How it runs:** once enabled, bookkeeping rides turns you already started. A small, bounded note is appended to the model input for that request only; the model adds a hidden data block at the end of its normal answer; the extension stores the result and removes the block before it is displayed or saved. It never starts a model request of its own and never adds a turn. The only separate requests are the ones you invoke explicitly (`bootstrap`, `review`).
 
