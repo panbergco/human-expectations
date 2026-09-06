@@ -1,6 +1,6 @@
 {
   "name": "human-expectations",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reconcile human intent with measurable delivery across pi sessions.",
   "type": "module",
   "license": "MIT",
@@ -28,7 +28,8 @@
     "SKILL.md",
     "PROMPT.md",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "check": "node --check extensions/index.ts && node --check src/core.mjs && node --check src/worker.mjs"
