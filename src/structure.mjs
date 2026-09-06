@@ -74,3 +74,10 @@ export function drill(state, id) {
   }
   throw Error(`Unknown outcome, group or expectation ${id}`);
 }
+
+/** Passes that no longer count: the re-check queue. */
+export function recheckQueue(state) {
+  const out = [];
+  for (const e of active(state)) for (const c of e.criteria) if (c.verdict === 'passed') { const f = freshness(c, e); if (f.state !== 'current') out.push({ id: c.id, expectation: e.title, state: f.state, reason: f.reason }); }
+  return out;
+}

@@ -5,7 +5,7 @@ import { readFile, writeFile, mkdir, unlink, realpath, readdir, open, stat } fro
 import { join, parse, resolve, relative, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { directory, document, load, lock, save, scan, prepare, reconcile, record, summary, exchange, safeDirectory, readRecord, atomic } from './core.mjs';
-import { setStructure, drill } from './structure.mjs';
+import { setStructure, drill, recheckQueue } from './structure.mjs';
 import { sessionActivity } from './activity.mjs';
 import { consolidationInput, applyTidy } from './consolidation.mjs';
 
@@ -92,6 +92,7 @@ async function execute(job) {
     const state = await load(project, { sources: !!job.session }); // drill/summary need no sources
     const activity = job.session ? sessionActivity(state, job.session) : undefined;
     if (job.node !== undefined) return drill(state, job.node || undefined);
+    if (job.recheck) return { recheck: recheckQueue(state) };
     return { ...summary(state), ...(activity ? { sessionActivity: activity } : {}), report: join(dir, 'EXPECTATIONS.md') };
   }
   return lock(project, '.writer-lock', async () => {

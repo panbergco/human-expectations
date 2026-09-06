@@ -261,7 +261,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
             try {
               const inputData = JSON.stringify({ ...reviewInput, repair });
               const response = await ctx.modelRegistry.complete(model, { systemPrompt: protocol, messages: [{ role: 'user', content: inputData, timestamp: Date.now() }] },
-                { signal: AbortSignal.any([abort.signal, AbortSignal.timeout(bootstrap ? 1200000 : 180000)]), maxTokens: bootstrap ? Math.min(32000, model.maxTokens || 32000) : Math.min(12000, model.maxTokens || 12000), reasoningEffort: 'low', sessionId: randomUUID() });
+                { signal: AbortSignal.any([abort.signal, AbortSignal.timeout(Math.min(1800000, (bootstrap ? 300000 : 120000) + Buffer.byteLength(inputData) / 100))]), maxTokens: bootstrap ? Math.min(32000, model.maxTokens || 32000) : Math.min(12000, model.maxTokens || 12000), reasoningEffort: 'low', sessionId: randomUUID() });
               run = { id: randomUUID(), at: new Date().toISOString(), mode: 'explicit-pass', model: `${model.provider}/${model.id}`, usage: response.usage, inputs: batch.inputs.length,
                 sourceRefs: batch.inputs.map((i: { ref: string }) => batch.references?.[i.ref] || i.ref), contextSha256: createHash('sha256').update(protocol + '\0' + inputData).digest('hex') };
               const calls = response.content.filter(b => b.type === 'toolCall');
@@ -327,7 +327,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
       const words = prefix.split(/\s+/);
       if (words.length > 1) {
         const verb = words[0], tail = words.at(-1) || '';
-        const options = (verb === 'report' ? ['this', 'full', '--project'] : verb === 'on' ? ['--global', '--project', '--budget', '30', '60'] : verb === 'off' ? ['--global', '--project'] : verb === 'bootstrap' || verb === 'review' ? ['--estimate', '--yes', '--project'] : ['--project']);
+        const options = (verb === 'report' ? ['this', 'full', 'recheck', '--project'] : verb === 'on' ? ['--global', '--project', '--budget', '30', '60'] : verb === 'off' ? ['--global', '--project'] : verb === 'bootstrap' || verb === 'review' ? ['--estimate', '--yes', '--project'] : ['--project']);
         const items = options.filter(o => o.startsWith(tail)).map(o => ({ value: `${words.slice(0, -1).join(' ')} ${o}`, label: o }));
         return items.length ? items : null;
       }
@@ -387,6 +387,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
             show(ctx, result.sessionActivity); return;
           }
           if (arg === 'full') { const result = await job(ctx, { op: 'report' }); show(ctx, `Full Markdown: ${result.report}`); return; }
+          if (arg === 'recheck') { const q = (await job(ctx, { op: 'report', recheck: true })).recheck; show(ctx, q.length ? ['Passes that no longer count until re-checked:', ...q.map((x: any) => `  ${x.id} — ${x.state}: ${x.reason} (${x.expectation})`), '', 'Re-check with /he audit <HE-id>'].join('\n') : 'No stale passes.'); return; }
           show(ctx, tree(await job(ctx, { op: 'report', node: arg || null })));
         } else if (action === 'audit') {
           // A user-invoked turn: the agent drives the checks with real tools and records what it observed.
