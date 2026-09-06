@@ -219,6 +219,8 @@ export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = fals
   for (const i of (retry.length ? retry : pending)) {
     // Routed messages need attribution, not extraction of requirements allegedly spoken by an agent.
     const x = i.origin === 'routed-unverified' ? { ref: i.ref, timestamp: i.timestamp, originHint: i.origin, text: i.text } : exchange(state, i);
+    // A ridden turn carries short excerpts only; the full exchange stays in the source log.
+    if (compact) { const clip = n => ({ ...n, text: String(n.text).slice(0, 400) + (String(n.text).length > 400 ? ' …' : '') }); x.before = (x.before || []).slice(-1).map(clip); x.after = (x.after || []).slice(0, 1).map(clip); x.text = String(x.text).slice(0, 1200); }
     if (x.before) x.before = x.before.map(n => ({ ...n, originHint: n.role === 'user' ? originByEntry.get(JSON.stringify([n.id, n.timestamp])) || 'unclassified' : 'assistant-context' }));
     const length = Buffer.byteLength(JSON.stringify(x));
     if (length > maxBytes) {

@@ -183,10 +183,12 @@ export default function humanExpectations(pi: ExtensionAPI) {
     const last = event.messages.at(-1);
     if (!last) return;
     // Appended to the tail only: the cached prefix of the conversation is untouched and nothing is persisted.
+    // Never mutate the live message object: replace the tail with a copy that carries the note.
     const content = typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : [...(last.content as any[])];
     content.push({ type: 'text', text: ride.text });
-    (last as any).content = content; rides.carried++;
-    return { messages: event.messages };
+    const messages = [...event.messages.slice(0, -1), { ...(last as any), content }];
+    rides.carried++;
+    return { messages };
   });
   pi.on('message_end', async (event, ctx) => {
     mark(ctx); // Observer only.
