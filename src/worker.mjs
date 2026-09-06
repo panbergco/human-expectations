@@ -1,0 +1,136 @@
+import { parentPort, workerData } from 'node:worker_threads';
+import { createReadStream } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFile, writeFile, mkdir, unlink, realpath, readdir, open, stat } from 'node:fs/promises';
+import { join, parse, resolve, relative, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { directory, document, load, lock, save, scan, prepare, reconcile, record, summary, exchange, safeDirectory, readRecord, atomic } from './core.mjs';
+import { setStructure } from './structure.mjs';
+import { sessionActivity } from './activity.mjs';
+import { consolidationInput } from './consolidation.mjs';
+
+async function writeRecord(path, value) {
+  await atomic(path, document(value));
+}
+async function discover(project, roots) {
+  const queue = [...new Set(roots)], files = [];
+  while (queue.length) {
+    const dir = queue.pop();
+    const entries = await readdir(dir, { withFileTypes: true }).catch(e => { if (e.code === 'ENOENT') return []; throw e; });
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) queue.push(path);
+      else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        const f = await open(path, 'r');
+        try {
+          let buffer = Buffer.alloc(512), { bytesRead } = await f.read(buffer, 0, buffer.length, 0);
+          let end = buffer.subarray(0, bytesRead).indexOf(10);
+          if (end < 0 && bytesRead === buffer.length) {
+            const larger = Buffer.alloc(65536); buffer.copy(larger);
+            const more = await f.read(larger, bytesRead, larger.length - bytesRead, bytesRead);
+            bytesRead += more.bytesRead; buffer = larger; end = buffer.subarray(0, bytesRead).indexOf(10);
+          }
+          if (end < 0) continue;
+          const h = JSON.parse(buffer.subarray(0, end).toString('utf8'));
+          if (h.type === 'session' && typeof h.cwd === 'string' && await realpath(h.cwd).catch(() => h.cwd) === project) files.push(path);
+        } catch (e) { if (!(e instanceof SyntaxError)) throw e; }
+        finally { await f.close(); }
+      }
+    }
+  }
+  return files.sort();
+}
+async function execute(job) {
+  const project = await realpath(job.project);
+  if ([parse(project).root, await realpath(homedir())].includes(project)) throw Error('Choose a project directory, not home/root');
+  const dir = await safeDirectory(project), configPath = join(dir, '.CONTROL.md'), statusPath = join(dir, '.STATUS.md');
+  if (job.op === 'status') return { ...await readRecord(configPath, { enabled: false, minutes: 30 }), ...await readRecord(statusPath, {}) };
+  if (job.op === 'configure') return lock(project, '.writer-lock', async () => {
+    const config = { ...await readRecord(configPath, {}), enabled: job.enabled, minutes: job.minutes };
+    if (!Number.isFinite(config.minutes) || config.minutes < 1 || config.minutes > 1440) throw Error('Minutes must be 1–1440');
+    if (job.automationPrefixes) {
+      if (!Array.isArray(job.automationPrefixes) || job.automationPrefixes.some(s => typeof s !== 'string' || s.length < 8)) throw Error('Automation prefixes must be explicit strings of at least 8 characters');
+      config.automationPrefixes = job.automationPrefixes;
+    }
+    await writeRecord(configPath, config); return config;
+  });
+  if (job.op === 'claim') {
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    await writeFile(join(dir, '.review-lock.md'), document({ token: job.token, pid: process.pid, at: new Date().toISOString() }), { flag: 'wx', mode: 0o600 }); return true;
+  }
+  if (job.op === 'release') {
+    const path = join(dir, '.review-lock.md'), lease = await readRecord(path);
+    if (lease?.token !== job.token) throw Error('Cannot release another reviewer’s lock');
+    await unlink(path); return true;
+  }
+  if (job.op === 'prepare') return prepare(await load(project), job.maxInputs, job.maxBytes);
+  if (job.op === 'prepareStructure') return consolidationInput(await load(project));
+  if (job.op === 'source') {
+    const state = await load(project), item = state.inputs.find(i => i.ref === job.ref);
+    if (!item) throw Error('Unknown source'); return { item, exchange: exchange(state, item) };
+  }
+  if (job.op === 'report') return lock(project, '.writer-lock', async () => {
+    const state = await load(project);
+    const activity = job.session ? sessionActivity(state, job.session) : undefined;
+    await save(state); return { ...summary(state), ...(activity ? { sessionActivity: activity } : {}), report: join(dir, 'EXPECTATIONS.md') };
+  });
+  return lock(project, '.writer-lock', async () => {
+    let state = await load(project), detail = {};
+    if (job.op === 'scan') {
+      const config = await readRecord(configPath, {});
+      const files = job.files || await discover(project, job.roots || []);
+      detail = { added: 0, bytes: 0, sessionsDiscovered: files.length };
+      for (const file of files) {
+        if (job.files && !(await stat(file)).isFile()) throw Error(`Explicit transcript is not a file: ${file}`);
+        const r = await scan(state, file, config.automationPrefixes || []); detail.added += r.added; detail.bytes += r.bytes;
+      }
+      // Without authenticated sender evidence, routed/replayed text cannot become human authority.
+      for (const i of state.inputs) if (!i.decision && i.origin === 'routed-unverified') i.decision = {
+        origin: 'uncertain', nature: 'needs-context', reason: 'Routed/replayed sender is not authenticated as human; retained for attribution review', expectations: [],
+      };
+      state.lastScan = new Date().toISOString(); // Advance the cadence even on an unchanged/empty scan.
+      state.revision++;
+    } else if (job.op === 'apply') {
+      state = reconcile(state, job.batch, job.result);
+      const prior = state.runs.find(r => r.id === job.run.id);
+      if (prior) Object.assign(prior, { failed: false, recovered: true }); else state.runs.push(job.run);
+    }
+    else if (job.op === 'record') {
+      const proofs = new Map();
+      for (const check of job.update?.checks || []) {
+        const path = await realpath(resolve(project, check.artifact));
+        if (!path.startsWith(project + sep) || !(await stat(path)).isFile()) throw Error('Evidence must be an existing project-local file, not a bare claim or external pointer');
+        if (!proofs.has(path)) {
+          const digest = createHash('sha256');
+          for await (const chunk of createReadStream(path)) digest.update(chunk);
+          proofs.set(path, digest.digest('hex'));
+        }
+        check.artifact = relative(project, path); check.artifactSha256 = proofs.get(path);
+      }
+      state = record(state, job.update);
+    }
+    else if (job.op === 'layout') {
+      if (job.split && state.expectations.length > 7 && !state.structure) throw Error('Create a reviewed 3–7-member outcome hierarchy before splitting this large report');
+      state.split = job.split; state.revision++;
+    }
+    else if (job.op === 'structure') {
+      if (job.revision !== state.revision) throw Error('Stale structure update');
+      const current = consolidationInput(state);
+      if (job.digest && job.digest !== current.digest) throw Error('Stale consolidation catalogue');
+      state = setStructure(state, job.structure);
+      state.structureDigest = current.digest;
+      if (job.run) state.runs.push(job.run);
+    }
+    else if (job.op === 'error') {
+      state.lastError = job.message;
+      if (job.run && !state.runs.some(r => r.id === job.run.id)) state.runs.push({ ...job.run, failed: true });
+      if (job.rejectedOutput) await writeRecord(join(dir, '.REJECTED.md'), { error: job.message, response: job.rejectedOutput });
+    }
+    else throw Error(`Unknown operation ${job.op}`);
+    if (job.op !== 'error') state.lastError = null;
+    await save(state);
+    const status = { ...summary(state), lastError: state.lastError, ...detail };
+    await writeRecord(statusPath, status); return status;
+  });
+}
+execute(workerData).then(value => parentPort.postMessage({ ok: true, value })).catch(error => parentPort.postMessage({ ok: false, error: String(error?.stack || error) }));

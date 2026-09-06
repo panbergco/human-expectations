@@ -1,0 +1,5 @@
+node_modules/
+.scratch/
+.human-expectations/
+# Local validation cases are not part of the public release
+test/
