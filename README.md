@@ -88,7 +88,7 @@ Levels appear only when a project needs them: a small project lists its expectat
 
 For a deliberate initial history review, `/he bootstrap` recovers recorded inputs, proposes expectations and checks, and organises a large record into a high-level overview. **This explicit pass makes separate model requests and can consume substantial quota on a long history; it only runs when you ask for it.** Without it, history is picked up gradually by your ordinary turns. `/he collect` reads new transcript text without any inference.
 
-What a ridden turn costs: up to about 12 KB of appended input plus a compact index of known outcome titles, and a short hidden output block — on that request only, never as an extra request.
+What a ridden turn costs: a per-turn budget you set (`/he on --budget 4000`, default 4,000 tokens — the outcome-title index and the batch fit inside it) plus a short hidden output block — on that request only, never as an extra request. Turns already above 80% of the context window are never ridden.
 
 Scraping history does not prove delivery. The agent must check the actual project and record evidence before a check becomes passed. A zero bar after setup means “not verified yet,” not “nothing has been built.”
 

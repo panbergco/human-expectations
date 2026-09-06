@@ -14,7 +14,7 @@ import { rideInstruction, extractRide, hideRide } from '../src/ride.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 // Per ridden turn: bookkeeping never exceeds this many source inputs / bytes of appended context.
-const RIDE_INPUTS = 6, RIDE_BYTES = 12000, RIDE_STRUCTURE_BYTES = 40000;
+const RIDE_INPUTS = 6, RIDE_STRUCTURE_BYTES = 40000, DEFAULT_BUDGET_TOKENS = 4000; // ~4 chars per token
 
 export default function humanExpectations(pi: ExtensionAPI) {
   let stopped = false, dirty = false, scheduling = false, enabled = false;
@@ -104,17 +104,23 @@ export default function humanExpectations(pi: ExtensionAPI) {
   }
   async function armRide(ctx: ExtensionContext) {
     if (!enabled || ride || active || stopped) return;
+    // Never ride a turn that is already near the context limit.
+    try { const u = ctx.getContextUsage?.(); const pct = u?.percent ?? (u?.tokens && ctx.model?.contextWindow ? 100 * u.tokens / ctx.model.contextWindow : 0); if (pct > 80) return; } catch {}
     const token = randomUUID();
     try {
       await job(ctx, { op: 'claim', token }); // Another session holding the lease means no double-carrying.
     } catch { return; }
     try {
       const status = await job(ctx, { op: 'status' });
+      const budgetBytes = Math.max(2000, (status.budgetTokens || DEFAULT_BUDGET_TOKENS) * 4);
       if (status.pending > 0) {
-        const batch = await job(ctx, { op: 'prepare', maxInputs: RIDE_INPUTS, maxBytes: RIDE_BYTES, compact: true });
+        // The index rides within the budget too: inputs get what remains after the title index.
+        const batch = await job(ctx, { op: 'prepare', maxInputs: RIDE_INPUTS, maxBytes: budgetBytes, compact: true });
         if (!batch.inputs.length) throw Error('nothing to carry');
         const { references: _r, oversized: _o, ...payload } = batch;
-        ride = { kind: 'inputs', token, batch, text: rideInstruction('inputs', payload), started: Date.now() }; rides.armed++;
+        let text = rideInstruction('inputs', payload);
+        while (Buffer.byteLength(text) > budgetBytes * 1.5 && payload.inputs.length > 1) { payload.inputs.pop(); text = rideInstruction('inputs', payload); }
+        ride = { kind: 'inputs', token, batch: { ...batch, inputs: payload.inputs }, text, started: Date.now() }; rides.armed++;
         return;
       }
       const input = await job(ctx, { op: 'prepareStructure' });
@@ -321,7 +327,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
       const words = prefix.split(/\s+/);
       if (words.length > 1) {
         const verb = words[0], tail = words.at(-1) || '';
-        const options = (verb === 'report' ? ['this', 'full', '--project'] : verb === 'on' ? ['--global', '--project', '30', '60'] : verb === 'off' ? ['--global', '--project'] : verb === 'bootstrap' || verb === 'review' ? ['--estimate', '--yes', '--project'] : ['--project']);
+        const options = (verb === 'report' ? ['this', 'full', '--project'] : verb === 'on' ? ['--global', '--project', '--budget', '30', '60'] : verb === 'off' ? ['--global', '--project'] : verb === 'bootstrap' || verb === 'review' ? ['--estimate', '--yes', '--project'] : ['--project']);
         const items = options.filter(o => o.startsWith(tail)).map(o => ({ value: `${words.slice(0, -1).join(' ')} ${o}`, label: o }));
         return items.length ? items : null;
       }
@@ -338,6 +344,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
       try {
         if (action === 'on' || action === 'off') {
           if (action === 'off') { controller?.abort(); await active?.catch(() => {}); if (timer) clearTimeout(timer); timer = undefined; await releaseRide(ctx); }
+          const b = rest.indexOf('--budget'); const budgetTokens = b >= 0 ? Number(rest.splice(b, 2)[1]) : undefined;
           const minutes = rest[0] ? Number(rest[0]) : 30;
           let backfill: string | undefined;
           if (action === 'on' && !global) {
@@ -353,11 +360,11 @@ export default function humanExpectations(pi: ExtensionAPI) {
               backfill = ['none', 'session', 'all'][options.indexOf(choice)];
             }
           }
-          const status = await job(ctx, { op: 'configure', enabled: action === 'on', minutes, scope: global ? 'global' : 'project', backfill, sessionFile: ctx.sessionManager.getSessionFile?.() });
+          const status = await job(ctx, { op: 'configure', enabled: action === 'on', minutes, scope: global ? 'global' : 'project', backfill, budgetTokens, sessionFile: ctx.sessionManager.getSessionFile?.() });
           enabled = !!status.enabled;
           if (enabled) { startWatching(ctx); mark(ctx); } else stopWatching();
           show(ctx, `${global ? 'Global' : 'Project'} setting: ${action}. Effective here: ${status.enabled ? 'on' : 'off'} (${status.activation}).\n` +
-            (status.enabled ? `History: ${status.backfill || 'all'}. Bookkeeping rides your own turns in small bounded pieces; it never starts a model request of its own. A project-level off always wins over global on. Explicit paid passes stay opt-in: /he bootstrap.` : 'The Markdown record is retained. Nothing runs until re-enabled.'));
+            (status.enabled ? `History: ${status.backfill || 'all'} · per-turn budget ${status.budgetTokens || DEFAULT_BUDGET_TOKENS} tokens. Bookkeeping rides your own turns in small bounded pieces; it never starts a model request of its own. A project-level off always wins over global on. Explicit paid passes stay opt-in: /he bootstrap.` : 'The Markdown record is retained. Nothing runs until re-enabled.'));
         } else if (action === 'collect') {
           show(ctx, await collect(ctx, rest.length ? rest.join(' ') : undefined));
         } else if (action === 'review' || action === 'bootstrap') {
@@ -417,7 +424,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
           const v = s.verdicts || {};
           show(ctx, [
             `Human expectations — ${project(ctx)}`,
-            `Active: ${s.enabled ? 'on' : 'off'} (${s.activation}) · history: ${s.backfill || 'all'} · intake every ${s.minutes} min`,
+            `Active: ${s.enabled ? 'on' : 'off'} (${s.activation}) · history: ${s.backfill || 'all'} · intake every ${s.minutes} min · per-turn budget ${s.budgetTokens || DEFAULT_BUDGET_TOKENS} tokens`,
             `Record: ${s.expectations ?? 0} expectations in ${s.outcomeGroups ?? 0} outcomes · ${s.inputs ?? 0} inputs from ${s.sessions ?? 0} sessions · ${s.pending ?? 0} pending · ${s.needsContext ?? 0} need context · ${s.unverifiedProposals ?? 0} held proposals`,
             `Verified: ${v.passed ?? 0} passed · ${v.failed ?? 0} failed · ${v.blocked ?? 0} blocked · ${v.unknown ?? 0} unknown (outcome checks)`,
             `Last intake: ${when(s.lastScan)} · last review: ${when(s.lastReview)} · last error: ${s.lastError ? s.lastError.split('\n')[0].slice(0, 120) : 'none'}`,

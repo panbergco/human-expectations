@@ -60,6 +60,7 @@ async function execute(job) {
   }
   if (job.op === 'configure') return lock(project, '.writer-lock', async () => {
     const config = { ...await readRecord(configPath, {}), enabled: job.enabled, minutes: job.minutes };
+    if (job.budgetTokens !== undefined) { if (!Number.isFinite(job.budgetTokens) || job.budgetTokens < 500 || job.budgetTokens > 50000) throw Error('Budget must be 500–50000 tokens'); config.budgetTokens = job.budgetTokens; }
     if (job.backfill) {
       if (!['none', 'session', 'all'].includes(job.backfill)) throw Error('Backfill scope must be none, session or all');
       Object.assign(config, { backfill: job.backfill, since: job.backfill === 'all' ? null : new Date().toISOString(), sessionFile: job.sessionFile || null });
