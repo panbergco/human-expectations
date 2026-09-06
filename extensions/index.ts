@@ -337,7 +337,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
         } else if (action === 'audit') {
           // A user-invoked turn: the agent drives the checks with real tools and records what it observed.
           const view = await job(ctx, { op: 'report', node: rest[0] || null });
-          const targets = view.checks ? [view] : await Promise.all((view.rows || []).filter((r: any) => r.kind === 'expectation').slice(0, 5).map((r: any) => job(ctx, { op: 'report', node: r.id })));
+          const targets = view.checks ? [view] : await Promise.all((view.rows || []).filter((r: any) => r.kind === 'expectation').slice(0, 7).map((r: any) => job(ctx, { op: 'report', node: r.id })));
           if (!targets.length) throw Error('Pick a group with expectations or one HE-id: /he audit HE-0001');
           const status = await job(ctx, { op: 'status' });
           const brief = [
