@@ -347,6 +347,12 @@ export default function humanExpectations(pi: ExtensionAPI) {
           const b = rest.indexOf('--budget'); const budgetTokens = b >= 0 ? Number(rest.splice(b, 2)[1]) : undefined;
           const minutes = rest[0] ? Number(rest[0]) : 30;
           let backfill: string | undefined;
+          if (action === 'on' && global) {
+            const projects = await job(ctx, { op: 'projects', roots: roots(ctx) });
+            const affected = projects.filter((p: any) => p.projectSetting !== 'off');
+            const ok = !ctx.hasUI || await ctx.ui.confirm('Enable for every project?', `${affected.length} project folder(s) known to pi would start collecting (projects set off stay off):\n` + affected.slice(0, 12).map((p: any) => `  ${p.project}`).join('\n') + (affected.length > 12 ? `\n  … and ${affected.length - 12} more` : ''));
+            if (!ok) { show(ctx, 'Global activation cancelled.'); return; }
+          }
           if (action === 'on' && !global) {
             const current = await job(ctx, { op: 'status' });
             if (!current.backfill) {

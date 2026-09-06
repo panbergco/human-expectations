@@ -52,6 +52,21 @@ async function execute(job) {
     return { ...local, enabled, minutes: local.minutes || global.minutes || 30, activation: typeof local.enabled === 'boolean' ? 'project' : global.enabled === true ? 'global' : 'default-off' };
   };
   if (job.op === 'status') return { ...await effective(), ...await readRecord(statusPath, {}) };
+  if (job.op === 'projects') {
+    // Which project directories would start collecting under a global on: every session cwd known to pi that is not explicitly off.
+    const seen = new Map();
+    for (const root of job.roots || []) for (const dir of await readdir(root, { withFileTypes: true }).catch(() => [])) {
+      if (!dir.isDirectory()) continue;
+      for (const f of await readdir(join(root, dir.name)).catch(() => [])) if (f.endsWith('.jsonl')) {
+        try { const h = await open(join(root, dir.name, f), 'r'); const b = Buffer.alloc(2048); const { bytesRead } = await h.read(b, 0, 2048, 0); await h.close();
+          const line = b.subarray(0, bytesRead).toString('utf8').split('\n')[0]; const hd = JSON.parse(line); if (hd.type === 'session' && typeof hd.cwd === 'string') seen.set(hd.cwd, (seen.get(hd.cwd) || 0) + 1); } catch {}
+        break; // one header per directory is enough
+      }
+    }
+    const out = [];
+    for (const [cwd, n] of seen) { const local = await readRecord(join(cwd, '.human-expectations', '.CONTROL.md'), {}).catch(() => ({})); out.push({ project: cwd, sessions: n, projectSetting: typeof local.enabled === 'boolean' ? (local.enabled ? 'on' : 'off') : 'inherits' }); }
+    return out.sort((a, b) => a.project.localeCompare(b.project));
+  }
   if (job.op === 'configure' && job.scope === 'global') {
     if (!globalPath) throw Error('No global settings directory');
     await mkdir(job.globalDir, { recursive: true, mode: 0o700 });
