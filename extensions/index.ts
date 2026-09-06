@@ -277,7 +277,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
   const VERBS: Record<string, string> = {
     on: 'enable for this project (add --global for all projects)', off: 'disable here (wins over global)', status: 'intake, pending, rides, cost',
     report: 'outcome overview; report this|<session-id> for one session', collect: 'read new transcript text, no inference',
-    bootstrap: 'explicit paid pass over pending history', review: 'explicit paid pass, one batch', split: 'overview + linked detail files', single: 'one report file',
+    audit: 'drive the checks of an outcome/expectation against the project and record evidence (starts a turn)', bootstrap: 'explicit paid pass over pending history', review: 'explicit paid pass, one batch', split: 'overview + linked detail files', single: 'one report file',
   };
   const command = {
     getArgumentCompletions: (prefix: string) => {
@@ -331,10 +331,36 @@ export default function humanExpectations(pi: ExtensionAPI) {
           }
           if (arg === 'full') { const result = await job(ctx, { op: 'report' }); show(ctx, `Full Markdown: ${result.report}`); return; }
           show(ctx, tree(await job(ctx, { op: 'report', node: arg || null })));
+        } else if (action === 'audit') {
+          // A user-invoked turn: the agent drives the checks with real tools and records what it observed.
+          const view = await job(ctx, { op: 'report', node: rest[0] || null });
+          const targets = view.checks ? [view] : await Promise.all((view.rows || []).filter((r: any) => r.kind === 'expectation').slice(0, 5).map((r: any) => job(ctx, { op: 'report', node: r.id })));
+          if (!targets.length) throw Error('Pick a group with expectations or one HE-id: /he audit HE-0001');
+          const status = await job(ctx, { op: 'status' });
+          const brief = [
+            `AUDIT of ${targets.length} expectation(s) against this project — establish what is actually delivered, not what was claimed.`,
+            `For every check below: obtain real evidence with the project's own tools (commands, files, the running system, a driven user path). State the method, the scope (build/commit, environment, time window) and the measured observation. A commit, a green test on the wrong layer, or an assistant's "done" is not evidence. If it cannot be observed, the verdict is unknown or blocked — never passed.`,
+            `Write your observations to .human-expectations/audits/<HE-id>-${new Date().toISOString().slice(0, 10)}.md (Markdown), then record each verdict with the human_expectations tool: action "record", revision ${status.revision}, expectation <HE-id>, holder "unassigned" unless the record names one, session "${ctx.sessionManager.getSessionId()}", checks [{id, verdict, observed, method, artifact (that audit file), scope, checkedBy "${ctx.sessionManager.getSessionId()} (self-check)", session}]. Re-read status for the current revision before each record call. Do not edit expectations or invent thresholds; if a check is ambiguous, say so in the audit file and leave it unknown.`,
+            '', ...targets.map((t: any) => `## ${t.id} — ${t.title}\n${t.intent}\n` + t.checks.map((c: any) => `- ${c.id} [${c.verdict}] ${c.obligation}`).join('\n')),
+          ].join('\n');
+          pi.sendMessage({ customType: 'human-expectations:audit', content: brief, display: true }, { triggerTurn: true });
         } else if (action === 'split' || action === 'single') {
           show(ctx, await job(ctx, { op: 'layout', split: action === 'split' }));
-        } else if (action === 'status') show(ctx, { ...await job(ctx, { op: 'status' }), thisSession: { enabled, rides } });
-        else throw Error('Use /he on|off [--global] [minutes], status, report, collect, bootstrap [transcript], split or single');
+        } else if (action === 'status') {
+          const s = await job(ctx, { op: 'status' });
+          const when = (t?: string) => t ? t.replace('T', ' ').slice(0, 16) : 'never';
+          const v = s.verdicts || {};
+          show(ctx, [
+            `Human expectations — ${project(ctx)}`,
+            `Active: ${s.enabled ? 'on' : 'off'} (${s.activation}) · history: ${s.backfill || 'all'} · intake every ${s.minutes} min`,
+            `Record: ${s.expectations ?? 0} expectations in ${s.outcomeGroups ?? 0} outcomes · ${s.inputs ?? 0} inputs from ${s.sessions ?? 0} sessions · ${s.pending ?? 0} pending · ${s.needsContext ?? 0} need context · ${s.unverifiedProposals ?? 0} held proposals`,
+            `Verified: ${v.passed ?? 0} passed · ${v.failed ?? 0} failed · ${v.blocked ?? 0} blocked · ${v.unknown ?? 0} unknown (outcome checks)`,
+            `Last intake: ${when(s.lastScan)} · last review: ${when(s.lastReview)} · last error: ${s.lastError ? s.lastError.split('\n')[0].slice(0, 120) : 'none'}`,
+            `This session: rides armed ${rides.armed} · carried ${rides.carried} · answered ${rides.answered} · applied ${rides.applied} · rejected ${rides.rejected} · missed ${rides.missed}`,
+            `Model runs: ${s.modelCalls ?? 0} · reported cost of explicit passes $${(s.recordedCost ?? 0).toFixed(2)}`,
+          ].join('\n'));
+        }
+        else throw Error('Use /he on|off [--global] [minutes], status, report [id], audit [id], collect, bootstrap [transcript], split or single');
       } catch (error) { if (ctx.hasUI) ctx.ui.notify(String(error), 'error'); }
     },
   };
