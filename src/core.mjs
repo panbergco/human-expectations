@@ -278,8 +278,12 @@ export function reconcile(state, batch, result) {
         current = { id: `${row.id}.${row.criteria.length + 1}`, obligation: c.obligation, check: c.check, verdict: 'unknown', evidence: null, history: [] };
         row.criteria.push(current); row.scopeVersion++;
       } else if (current.obligation !== c.obligation || current.check !== c.check) {
-        current.history.push({ at: stamp(), ...current.evidence, verdict: current.verdict });
-        current.verdict = 'unknown'; current.evidence = null; row.scopeVersion++;
+        // A rewording that keeps the meaning (high word overlap) keeps its evidence; a real change of obligation loses credit.
+        const words = t => new Set(String(t).toLowerCase().match(/[a-z0-9]{3,}/g) || []);
+        const a = words(current.obligation), b = words(c.obligation);
+        const overlap = [...a].filter(x => b.has(x)).length / Math.max(1, Math.max(a.size, b.size));
+        current.history.push({ at: stamp(), ...current.evidence, verdict: current.verdict, previousObligation: current.obligation });
+        if (overlap < 0.7 || current.check !== c.check && overlap < 0.9) { current.verdict = 'unknown'; current.evidence = null; row.scopeVersion++; }
       }
       current.obligation = c.obligation; current.check = c.check;
       rememberOwner(c.id, row); rememberOwner(current.id, row);
