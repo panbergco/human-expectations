@@ -97,9 +97,9 @@ export default function humanExpectations(pi: ExtensionAPI) {
   }
 
   // ---- Riding an already-occurring turn: the only automatic path to inference. ----
-  async function releaseRide(ctx: ExtensionContext) {
+  async function releaseRide(ctx: ExtensionContext, applied = false) {
     const current = ride; ride = undefined;
-    if (current) rides.missed++;
+    if (current && !applied) rides.missed++;
     if (current) await job(ctx, { op: 'release', token: current.token }).catch(() => {});
   }
   async function armRide(ctx: ExtensionContext) {
@@ -165,7 +165,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
       rides.rejected++;
       // Invalid output is recorded and the sources stay pending. No repair request is ever started.
       await job(ctx, { op: 'error', message: String(error), run, rejectedOutput: json }).catch(() => {});
-    } finally { await releaseRide(ctx); }
+    } finally { await releaseRide(ctx, true); }
   }
 
   pi.on('session_start', (_event, ctx) => {
