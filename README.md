@@ -4,7 +4,7 @@
 
 Long projects span many conversations. Requests get forgotten, corrections get lost, and “done” can mean little more than someone said it was done. Human Expectations keeps a shared project record of what you asked for, how your intent changed, and what has actually been verified.
 
-> **Early release:** history recovery, expectation records and outcome grouping are available. The fully invisible mode—reconciling inside already-running agent work without separate model requests—is still being completed. Automatic review is off by default; keep it off until that mode is ready. Current manual history reviews make additional model requests.
+> **How it runs:** once enabled, bookkeeping rides turns you already started. A small, bounded note is appended to the model input for that request only; the model adds a hidden data block at the end of its normal answer; the extension stores the result and removes the block before it is displayed or saved. It never starts a model request of its own and never adds a turn. The only separate requests are the ones you invoke explicitly (`bootstrap`, `review`).
 
 ## What you get
 
@@ -57,7 +57,13 @@ The activation policy is:
 - **Global opt-in:** enable it across projects only through an explicit global choice.
 - **Project overrides:** a project can remain off even when global activation is on.
 
-**Release status:** project-level controls exist; global activation and the invisible in-turn processing path are not yet complete. Global installation availability is not the same as global activation. For now, leave automatic processing off.
+```text
+/human-expectations on            # this project
+/human-expectations on --global   # every project (still overridable per project)
+/human-expectations off           # this project, even if global is on
+```
+
+Installation availability is not activation. `status` shows the effective setting and where it comes from.
 
 ## Using the current release
 
@@ -67,7 +73,9 @@ To inspect an existing project record, ask Pi:
 
 Or use `/human-expectations report` directly. `/human-expectations status` shows whether history is still pending and whether the last review encountered a problem. `/human-expectations off` stops automatic processing without deleting the record.
 
-For a deliberate initial history review, `/human-expectations bootstrap` recovers recorded inputs, proposes expectations and checks, and organises a large record into a high-level overview. **This current review path uses additional model requests and can consume substantial quota on a long history. It is not yet the invisible mode described above.**
+For a deliberate initial history review, `/human-expectations bootstrap` recovers recorded inputs, proposes expectations and checks, and organises a large record into a high-level overview. **This explicit pass makes separate model requests and can consume substantial quota on a long history; it only runs when you ask for it.** Without it, history is picked up gradually by your ordinary turns. `/human-expectations collect` reads new transcript text without any inference.
+
+What a ridden turn costs: up to about 12 KB of appended input plus a compact index of known outcome titles, and a short hidden output block — on that request only, never as an extra request.
 
 Scraping history does not prove delivery. The agent must check the actual project and record evidence before a check becomes passed. A zero bar after setup means “not verified yet,” not “nothing has been built.”
 
@@ -84,7 +92,7 @@ The design rules are:
 - Reading or rewriting the memory does not reset the age of its supporting evidence.
 - Freshness comes from source changes and observations during existing agent work, not additional scheduled model turns.
 
-These are acceptance requirements for the invisible mode still being completed. The current release preserves source references, corrections and observation timestamps, but does not automatically prove that every stored interpretation or old test result remains valid.
+The record preserves source references, corrections and observation timestamps; a changed or challenged obligation drops its old pass; a human report that something is still broken withdraws credit; the report shows when a pass was last verified and flags passes older than the latest related human statement. It does not automatically prove that every stored interpretation or old test result remains valid — that needs new evidence from real work.
 
 ## Keep your project history private
 

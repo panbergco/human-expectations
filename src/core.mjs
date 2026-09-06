@@ -163,8 +163,8 @@ export function exchange(state, item) {
     before, after, contextPending: after.length === 0 };
 }
 
-export function prepare(state, maxInputs = 48, maxBytes = 110000) {
-  const batch = []; let bytes = 0;
+export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = false) {
+  const batch = []; let bytes = 0, oversized = 0;
   const originByEntry = new Map(state.inputs.map(i => [JSON.stringify([i.entry, i.timestamp]), i.origin]));
   const pending = state.inputs.filter(i => !i.decision || i.decision.pendingIntent), missed = new Set(state.lastBatch?.missingRefs || []);
   const retry = pending.filter(i => missed.has(i.ref));
@@ -173,14 +173,21 @@ export function prepare(state, maxInputs = 48, maxBytes = 110000) {
     const x = i.origin === 'routed-unverified' ? { ref: i.ref, timestamp: i.timestamp, originHint: i.origin, text: i.text } : exchange(state, i);
     if (x.before) x.before = x.before.map(n => ({ ...n, originHint: n.role === 'user' ? originByEntry.get(JSON.stringify([n.id, n.timestamp])) || 'unclassified' : 'assistant-context' }));
     const length = Buffer.byteLength(JSON.stringify(x));
-    if (length > maxBytes) throw Error(`Input ${i.ref} exceeds batch limit; original retained, explicit review required`);
+    if (length > maxBytes) {
+      // A ridden turn skips what does not fit and leaves it for an explicit pass; an explicit pass must not hide it.
+      if (compact) { oversized++; continue; }
+      throw Error(`Input ${i.ref} exceeds batch limit; original retained, explicit review required`);
+    }
     if (batch.length && (batch.length === maxInputs || bytes + length > maxBytes)) break;
     batch.push(x); bytes += length;
   }
-  const existing = state.expectations.map(e => ({ id: e.id, title: e.title, intent: e.intent, kind: e.kind,
-    supersededBy: e.supersededBy, criteria: e.criteria.map(c => ({ id: c.id, obligation: c.obligation, check: c.check })), latestSources: e.sources.slice(-2) }));
+  // A ridden turn carries a title index only; the full catalogue is reserved for explicit passes.
+  const existing = state.expectations.filter(e => !compact || !e.supersededBy).map(e => compact
+    ? { id: e.id, t: e.title.slice(0, 90) }
+    : { id: e.id, title: e.title, intent: e.intent, kind: e.kind, supersededBy: e.supersededBy,
+      criteria: e.criteria.map(c => ({ id: c.id, obligation: c.obligation, check: c.check })), latestSources: e.sources.slice(-2) });
   const references = Object.fromEntries(batch.map((x, n) => [`IN-${n + 1}`, x.ref]));
-  const payload = { project: state.project, revision: state.revision, existing, references,
+  const payload = { project: state.project, revision: state.revision, existing, references, ...(oversized ? { oversized } : {}),
     inputs: batch.map((x, n) => ({ ...x, session: x.ref.split('/')[0], ref: `IN-${n + 1}` })) };
   if (Buffer.byteLength(JSON.stringify(payload)) > maxBytes + 70000) throw Error('Expectation index exceeds review budget; reconcile the outcome grouping before continuing');
   return payload;
@@ -205,7 +212,8 @@ export function reconcile(state, batch, result) {
   for (const row of next.expectations) for (const c of row.criteria) rememberOwner(c.id, row);
   for (const proposal of result.expectations) {
     for (const f of ['id', 'title', 'intent', 'kind']) need(proposal[f], f);
-    if (!['outcome', 'standing'].includes(proposal.kind)) throw Error('Invalid expectation kind');
+    // The store owns the two kinds; a model's synonym for one of them is not a reason to lose a valid batch.
+    if (!['outcome', 'standing'].includes(proposal.kind)) proposal.kind = /standing|constraint|rule|standard|policy|principle|invariant|compliance/i.test(String(proposal.kind)) ? 'standing' : 'outcome';
     let row = aliases.get(proposal.id);
     // Unknown labels in a fully specified model proposal are local aliases, not durable IDs.
     // The store, not the model, allocates stable sequential identifiers.
@@ -326,7 +334,8 @@ export function summary(state) {
   return { revision: state.revision, inputs: state.inputs.length, pending: state.inputs.filter(i => !i.decision || i.decision.pendingIntent).length,
     needsContext: state.inputs.filter(i => i.decision?.nature === 'needs-context' || i.decision?.origin === 'uncertain' || i.decision?.needsReview).length,
     unverifiedProposals: state.unverifiedProposals?.length || 0,
-    expectations: state.expectations.length, outcomeGroups: rollups(state).length, sessions: Object.keys(state.files).length,
+    expectations: state.expectations.length, outcomeGroups: rollups(state).length,
+    sessions: new Set(Object.values(state.files).map(f => f.header?.id).filter(Boolean)).size, sourceFiles: Object.keys(state.files).length,
     originCounts, verdicts, lastScan: state.lastScan, lastReview: state.lastReview, lastError: state.lastError || null,
     lastBatch: state.lastBatch || null,
     recordedCost: state.runs.reduce((n, r) => n + (r.usage?.cost?.total || 0), 0), modelCalls: state.runs.length };
@@ -336,7 +345,7 @@ const coverage = e => { const total = e.criteria.length, passed = e.criteria.fil
 export function markdown(state) {
   const s = summary(state);
   const lines = ['# Human expectations — intent versus measured delivery', '', `Project: ${state.project}`, `Last intake: ${s.lastScan ?? 'never'} · Last intent review: ${s.lastReview ?? 'never'} · Revision ${s.revision}`,
-    `${s.inputs} source inputs across ${s.sessions} transcripts · ${s.pending} pending · ${s.needsContext} need context · ${s.expectations} expectation records / ${s.outcomeGroups} outcome groups`,
+    `${s.inputs} source inputs across ${s.sessions} sessions (${s.sourceFiles} files) · ${s.pending} pending · ${s.needsContext} need context · ${s.expectations} expectation records / ${s.outcomeGroups} outcome groups`,
     `Unverified proposals held outside completion counts: ${s.unverifiedProposals}`,
     `Last extraction error: ${s.lastError || 'none'}`,
     `Origin judgments: ${Object.entries(s.originCounts).map(([k, v]) => `${k}: ${v}`).join(' · ')}`, '',
@@ -350,7 +359,10 @@ export function markdown(state) {
     const progress = e.kind === 'mixed'
       ? `Outcomes ${showBar(e.rows.filter(r => r.kind === 'outcome').flatMap(r => r.criteria))}; standing compliance ${showBar(e.rows.filter(r => r.kind === 'standing').flatMap(r => r.criteria))}`
       : showBar(e.criteria);
-    lines.push(`| ${e.id} · ${line(e.title)} | ${progress}${e.reconciled ? '' : ' provisional'} | ${e.criteria.filter(c => c.verdict !== 'passed').length} checks not passing · ${e.kind === 'standing' ? 'standing compliance, not permanent completion' : e.kind} |`);
+    const verified = e.criteria.filter(c => c.verdict === 'passed' && c.evidence?.at).map(c => c.evidence.at).sort();
+    const latestWords = e.rows.flatMap(r => r.sources.map(x => x.timestamp)).sort().at(-1);
+    const predates = verified.length && latestWords && verified.at(-1) < latestWords ? ' · verified before the latest related human statement: re-check' : '';
+    lines.push(`| ${e.id} · ${line(e.title)} | ${progress}${e.reconciled ? '' : ' provisional'} | ${e.criteria.filter(c => c.verdict !== 'passed').length} checks not passing · ${e.kind === 'standing' ? 'standing compliance, not permanent completion' : e.kind}${verified.length ? ` · last verified ${verified.at(-1).slice(0, 10)}` : ''}${predates} |`);
   }
   for (const e of state.expectations) {
     lines.push('', `## ${e.id} — ${e.title}${e.supersededBy ? ` (superseded: ${e.supersededBy})` : ''}`, '', e.intent, '', `Holder: ${e.holder} · Scope version: ${e.scopeVersion} · MECE/source coverage: ${e.reconciled ? 'recorded review' : 'not yet audited'}`,
@@ -364,6 +376,7 @@ export function markdown(state) {
     for (const p of state.unverifiedProposals) lines.push(`- ${line(p.proposal.title || p.proposal.id)}: ${line(p.reason)} · ${p.sources.map(ref => `⟦${ref}⟧`).join(', ')}`);
   }
   lines.push('', '## Limits', 'Human-supported is a contextual classification, not authenticated identity. Routed/uncertain inputs are not human authority. Evidence is recorded by the caller, not executed by this extension. Source references and full judgments are in .STATE.md.',
-    `Separate extraction requests: ${s.modelCalls}; reported cost $${s.recordedCost.toFixed(4)} (not included in foreground pi totals).`, '');
+    'Verification dates are observation times; re-reading or rewriting this record never refreshes them. A pass is scoped to the build/environment/time window in its evidence.',
+    `Model runs: ${s.modelCalls} (${state.runs.filter(r => r.mode === 'explicit-pass').length} explicit separate requests; the rest rode ordinary turns); reported separate-request cost $${s.recordedCost.toFixed(4)} (not included in foreground pi totals).`, '');
   return lines.join('\n');
 }

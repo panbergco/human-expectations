@@ -44,7 +44,20 @@ async function execute(job) {
   const project = await realpath(job.project);
   if ([parse(project).root, await realpath(homedir())].includes(project)) throw Error('Choose a project directory, not home/root');
   const dir = await safeDirectory(project), configPath = join(dir, '.CONTROL.md'), statusPath = join(dir, '.STATUS.md');
-  if (job.op === 'status') return { ...await readRecord(configPath, { enabled: false, minutes: 30 }), ...await readRecord(statusPath, {}) };
+  const globalPath = job.globalDir ? join(job.globalDir, '.CONTROL.md') : null;
+  const effective = async () => {
+    const local = await readRecord(configPath, {}), global = globalPath ? await readRecord(globalPath, {}) : {};
+    // Off by default. An explicit project setting always wins over the global one.
+    const enabled = typeof local.enabled === 'boolean' ? local.enabled : global.enabled === true;
+    return { ...local, enabled, minutes: local.minutes || global.minutes || 30, activation: typeof local.enabled === 'boolean' ? 'project' : global.enabled === true ? 'global' : 'default-off' };
+  };
+  if (job.op === 'status') return { ...await effective(), ...await readRecord(statusPath, {}) };
+  if (job.op === 'configure' && job.scope === 'global') {
+    if (!globalPath) throw Error('No global settings directory');
+    await mkdir(job.globalDir, { recursive: true, mode: 0o700 });
+    await writeRecord(globalPath, { ...await readRecord(globalPath, {}), enabled: job.enabled, minutes: job.minutes });
+    return effective();
+  }
   if (job.op === 'configure') return lock(project, '.writer-lock', async () => {
     const config = { ...await readRecord(configPath, {}), enabled: job.enabled, minutes: job.minutes };
     if (!Number.isFinite(config.minutes) || config.minutes < 1 || config.minutes > 1440) throw Error('Minutes must be 1–1440');
@@ -52,7 +65,7 @@ async function execute(job) {
       if (!Array.isArray(job.automationPrefixes) || job.automationPrefixes.some(s => typeof s !== 'string' || s.length < 8)) throw Error('Automation prefixes must be explicit strings of at least 8 characters');
       config.automationPrefixes = job.automationPrefixes;
     }
-    await writeRecord(configPath, config); return config;
+    await writeRecord(configPath, config); return effective();
   });
   if (job.op === 'claim') {
     await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -63,7 +76,7 @@ async function execute(job) {
     if (lease?.token !== job.token) throw Error('Cannot release another reviewer’s lock');
     await unlink(path); return true;
   }
-  if (job.op === 'prepare') return prepare(await load(project), job.maxInputs, job.maxBytes);
+  if (job.op === 'prepare') return prepare(await load(project), job.maxInputs, job.maxBytes, job.compact);
   if (job.op === 'prepareStructure') return consolidationInput(await load(project));
   if (job.op === 'source') {
     const state = await load(project), item = state.inputs.find(i => i.ref === job.ref);
@@ -92,8 +105,10 @@ async function execute(job) {
       state.revision++;
     } else if (job.op === 'apply') {
       state = reconcile(state, job.batch, job.result);
-      const prior = state.runs.find(r => r.id === job.run.id);
-      if (prior) Object.assign(prior, { failed: false, recovered: true }); else state.runs.push(job.run);
+      if (job.run) {
+        const prior = state.runs.find(r => r.id === job.run.id);
+        if (prior) Object.assign(prior, { failed: false, recovered: true }); else state.runs.push(job.run);
+      }
     }
     else if (job.op === 'record') {
       const proofs = new Map();

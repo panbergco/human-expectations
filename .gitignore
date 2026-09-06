@@ -3,3 +3,10 @@ node_modules/
 .human-expectations/
 # Local validation cases are not part of the public release
 test/
+# Local agent bookkeeping and generated files
+.pi/
+AGENTS.md
+CLAUDE.md
+.claude/
+.gitnexus/
+.cocoindex_code/
