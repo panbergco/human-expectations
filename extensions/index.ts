@@ -45,7 +45,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
     const lines: string[] = [];
     if (view.checks) {
       lines.push(`${view.id} · ${view.title}`, view.intent, `${view.bar} · ${view.kind}`, '');
-      for (const c of view.checks) lines.push(`  ${c.verdict === 'passed' ? '✔' : c.verdict === 'failed' ? '✖' : '·'} ${c.id} ${c.obligation}${c.verifiedAt ? ` — verified ${c.verifiedAt.slice(0, 10)}, ${c.scope}` : ''}`);
+      for (const c of view.checks) lines.push(`  ${c.verdict === 'passed' ? (c.freshness?.state === 'current' ? '✔' : '◐') : c.verdict === 'failed' ? '✖' : '·'} ${c.id} ${c.obligation}${c.verifiedAt ? ` — ${c.verdict} ${c.verifiedAt.slice(0, 10)}${c.freshness && c.freshness.state !== 'current' ? ` (${c.freshness.state}: ${c.freshness.reason})` : ''}` : ''}`);
       lines.push('', 'Human words:'); for (const s of view.sources.slice(-5)) lines.push(`  ${s.when.slice(0, 10)} "${s.words.slice(0, 160)}"`);
       return lines.join('\n');
     }
@@ -340,10 +340,12 @@ export default function humanExpectations(pi: ExtensionAPI) {
           const targets = view.checks ? [view] : await Promise.all((view.rows || []).filter((r: any) => r.kind === 'expectation').slice(0, 7).map((r: any) => job(ctx, { op: 'report', node: r.id })));
           if (!targets.length) throw Error('Pick a group with expectations or one HE-id: /he audit HE-0001');
           const status = await job(ctx, { op: 'status' });
+          const { execSync } = await import('node:child_process');
+          let build = 'unknown'; try { build = execSync('git rev-parse HEAD', { cwd: project(ctx), stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch {}
           const brief = [
             `AUDIT of ${targets.length} expectation(s) against the project at ${project(ctx)} — run every command and read every file THERE (cd into it); establish what is actually delivered, not what was claimed.`,
             `For every check below: obtain real evidence with the project's own tools (commands, files, the running system, a driven user path). State the method, the scope (build/commit, environment, time window) and the measured observation. A commit, a green test on the wrong layer, or an assistant's "done" is not evidence. If it cannot be observed, the verdict is unknown or blocked — never passed.`,
-            `Write your observations to .human-expectations/audits/<HE-id>-${new Date().toISOString().slice(0, 10)}.md (Markdown), then record each verdict with the human_expectations tool: action "record", revision ${status.revision}, expectation <HE-id>, holder "unassigned" unless the record names one, session "${ctx.sessionManager.getSessionId()}", checks [{id, verdict, observed, method, artifact (that audit file), scope, checkedBy "${ctx.sessionManager.getSessionId()} (self-check)", session}]. Re-read status for the current revision before each record call. Do not edit expectations or invent thresholds; if a check is ambiguous, say so in the audit file and leave it unknown.`,
+            `Write your observations to .human-expectations/audits/<HE-id>-${new Date().toISOString().slice(0, 10)}.md (Markdown), then record each verdict with the human_expectations tool: action "record", revision ${status.revision}, expectation <HE-id>, holder "unassigned" unless the record names one, session "${ctx.sessionManager.getSessionId()}", build "${build}", checks [{id, verdict, observed, method, artifact (that audit file), scope, checkedBy "${ctx.sessionManager.getSessionId()} (self-check)", session}]. Re-read status for the current revision before each record call. Do not edit expectations or invent thresholds; if a check is ambiguous, say so in the audit file and leave it unknown.`,
             '', ...targets.map((t: any) => `## ${t.id} — ${t.title}\n${t.intent}\n` + t.checks.map((c: any) => `- ${c.id} [${c.verdict}] ${c.obligation}`).join('\n')),
           ].join('\n');
           pi.sendMessage({ customType: 'human-expectations:audit', content: brief, display: true }, { triggerTurn: true });
@@ -378,7 +380,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
       ref: Type.Optional(Type.String()), node: Type.Optional(Type.String({ description: 'Report drill-down: omit for outcomes, GX-id for a group, HE-id for one expectation with its checks and sources.' })), session: Type.Optional(Type.String({ description: 'Report: full/unique-prefix session ID, or this. Verification activity, not inferred implementation credit.' })), revision: Type.Optional(Type.Integer()),
       structure: Type.Optional(Type.Any({ description: 'MECE hierarchy: {dimension, groups}. Each node is an HE-id or {id:GX-0001,title,dimension,children}; 3–7 members per group, every active HE-id exactly once.' })),
       update: Type.Optional(Type.Object({
-        revision: Type.Integer(), expectation: Type.String(), holder: Type.String(), session: Type.String(),
+        revision: Type.Integer(), expectation: Type.String(), holder: Type.String(), session: Type.String(), build: Type.Optional(Type.String({ description: 'Commit/build the checks were measured on; evidence is marked historical once the project moves on.' })),
         reconciled: Type.Optional(Type.Boolean()), coverageEvidence: Type.Optional(Type.String()),
         checks: Type.Array(Type.Object({ id: Type.String(), verdict: StringEnum(['passed', 'failed', 'blocked', 'unknown'] as const),
           observed: Type.String(), observedAt: Type.Optional(Type.String({ description: 'Actual observation ISO timestamp; required for historical evidence, defaults to now for a fresh check.' })), method: Type.String(), artifact: Type.String(), scope: Type.String(), checkedBy: Type.String(), session: Type.String() })),

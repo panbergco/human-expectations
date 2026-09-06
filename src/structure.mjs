@@ -1,4 +1,6 @@
+import { freshness } from './freshness.mjs';
 const active = state => state.expectations.filter(e => !e.supersededBy);
+const tagged = e => e.criteria.map(c => Object.assign(Object.create(null), c, { __e: e }));
 
 export function setStructure(state, plan) {
   if (!plan || typeof plan.dimension !== 'string' || !plan.dimension.trim() || !Array.isArray(plan.groups)) throw Error('Name one cut dimension and supply groups');
@@ -32,11 +34,11 @@ export function rollups(state) {
   const result = groups.map(node => {
     const rows = rowsOf(node).filter(e => { if (assigned.has(e.id)) return false; assigned.add(e.id); return true; });
     return { id: typeof node === 'string' ? node : node.id, title: typeof node === 'string' ? byId.get(node)?.title || node : node.title,
-      rows, criteria: rows.flatMap(e => e.criteria), reconciled: rows.length > 0 && rows.every(e => e.reconciled),
+      rows, criteria: rows.flatMap(tagged), reconciled: rows.length > 0 && rows.every(e => e.reconciled),
       kind: rows.every(e => e.kind === 'standing') ? 'standing' : rows.every(e => e.kind === 'outcome') ? 'outcome' : 'mixed' };
   });
   const unplaced = [...byId.values()].filter(e => !assigned.has(e.id));
-  if (unplaced.length) result.push({ id: 'UNPLACED', title: 'New intent awaits structural reconciliation', rows: unplaced, criteria: unplaced.flatMap(e => e.criteria), reconciled: false, kind: 'mixed' });
+  if (unplaced.length) result.push({ id: 'UNPLACED', title: 'New intent awaits structural reconciliation', rows: unplaced, criteria: unplaced.flatMap(tagged), reconciled: false, kind: 'mixed' });
   return result.filter(r => r.rows.length);
 }
 
@@ -45,28 +47,30 @@ export function groupNodes(plan) {
 }
 
 const bar = criteria => {
-  const total = criteria.length, passed = criteria.filter(c => c.verdict === 'passed').length, pct = total ? Math.round(100 * passed / total) : null;
-  const blocks = Math.floor((pct || 0) / 10);
-  return { passed, total, pct, bar: `${'█'.repeat(blocks)}${'░'.repeat(10 - blocks)} ${pct ?? '—'}% (${passed}/${total})` };
+  const total = criteria.length;
+  const passed = criteria.filter(c => c.verdict === 'passed' && freshness(c, c.__e).state === 'current').length;
+  const stale = criteria.filter(c => c.verdict === 'passed' && freshness(c, c.__e).state !== 'current').length;
+  const pct = total ? Math.round(100 * passed / total) : null, blocks = Math.floor((pct || 0) / 10);
+  return { passed, stale, total, pct, bar: `${'█'.repeat(blocks)}${'░'.repeat(10 - blocks)} ${pct ?? '—'}% (${passed}/${total})${stale ? ` · ${stale} stale pass${stale > 1 ? 'es' : ''}` : ''}` };
 };
 /** Drill-down view: level 1 = outcomes, level 2 = sub-outcomes, level 3 = expectations, then their checks. */
 export function drill(state, id) {
   const byId = new Map(active(state).map(e => [e.id, e]));
   const rowsOf = node => typeof node === 'string' ? (byId.has(node) ? [byId.get(node)] : []) : node.children.flatMap(rowsOf);
   const describe = (node, level) => {
-    const rows = rowsOf(node), criteria = rows.flatMap(e => e.criteria);
+    const rows = rowsOf(node), criteria = rows.flatMap(tagged);
     const e = typeof node === 'string' ? byId.get(node) : null;
     return { id: e ? e.id : node.id, level, kind: e ? 'expectation' : 'group', title: e ? e.title : node.title, ...bar(criteria),
       unverified: criteria.filter(c => c.verdict !== 'passed').length, expectations: rows.length, children: e ? undefined : node.children.length };
   };
   if (!id) return { level: 1, title: 'Outcomes', rows: (state.structure?.groups || [...byId.keys()]).map(n => describe(n, 1)) };
   const e = byId.get(id);
-  if (e) return { level: 3, id: e.id, title: e.title, intent: e.intent, kind: e.kind, ...bar(e.criteria),
-    checks: e.criteria.map(c => ({ id: c.id, obligation: c.obligation, verdict: c.verdict, observed: c.evidence?.observed || null, verifiedAt: c.evidence?.at || null, scope: c.evidence?.scope || null })),
+  if (e) return { level: 3, id: e.id, title: e.title, intent: e.intent, kind: e.kind, ...bar(tagged(e)),
+    checks: e.criteria.map(c => ({ id: c.id, obligation: c.obligation, verdict: c.verdict, freshness: freshness(c, e), observed: c.evidence?.observed || null, verifiedAt: c.evidence?.at || null, scope: c.evidence?.scope || null })),
     sources: e.sources.map(s => ({ ref: s.ref, when: s.timestamp, words: s.quote })) };
   for (const g of groupNodes(state.structure)) if (g.id === id) {
     const level = (state.structure.groups || []).some(n => n === g || n.id === g.id) ? 2 : 3;
-    return { level, id: g.id, title: g.title, dimension: g.dimension, ...bar(rowsOf(g).flatMap(e => e.criteria)), rows: g.children.map(n => describe(n, level)) };
+    return { level, id: g.id, title: g.title, dimension: g.dimension, ...bar(rowsOf(g).flatMap(tagged)), rows: g.children.map(n => describe(n, level)) };
   }
   throw Error(`Unknown outcome, group or expectation ${id}`);
 }

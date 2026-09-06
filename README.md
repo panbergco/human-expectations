@@ -105,7 +105,7 @@ The design rules are:
 - Reading or rewriting the memory does not reset the age of its supporting evidence.
 - Freshness comes from source changes and observations during existing agent work, not additional scheduled model turns.
 
-The record preserves source references, corrections and observation timestamps; a changed or challenged obligation drops its old pass; a human report that something is still broken withdraws credit; the report shows when a pass was last verified and flags passes older than the latest related human statement. It does not automatically prove that every stored interpretation or old test result remains valid — that needs new evidence from real work.
+Every pass carries a derived freshness — **current**, **stale** (a later human statement or a changed obligation), **needs-review** (the human said it is still broken), **historical** (measured on an earlier build) — and only current passes count toward a bar. Freshness is computed from what happened since the observation; reading or rewriting the record never refreshes it. It does not automatically prove that every stored interpretation or old test result remains valid — that needs new evidence from real work.
 
 ## Keep your project history private
 

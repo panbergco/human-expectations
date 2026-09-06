@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { rollups, groupNodes } from './structure.mjs';
 import { expandCompact } from './compact.mjs';
 import { completeLines } from './lines.mjs';
+import { freshness } from './freshness.mjs';
 
 export const hash = s => createHash('sha256').update(s).digest('hex');
 const stamp = () => new Date().toISOString();
@@ -270,6 +271,7 @@ export function reconcile(state, batch, result) {
         if (!row.sources.some(s => s.ref === item.ref)) row.sources.push({ ref: item.ref, quote, timestamp: item.timestamp });
       }
       // Non-durable inputs can cross-reference an outcome without becoming a human requirement.
+      if (d.relation === 'regression' && d.origin === 'human-supported') row.challengedAt = item.timestamp;
       if (d.relation === 'regression' && d.origin === 'human-supported') for (const c of row.criteria) {
         if (c.verdict === 'passed') { c.history.push({ at: stamp(), verdict: c.verdict, evidence: c.evidence }); c.verdict = 'unknown'; c.evidence = null; }
       }
@@ -318,7 +320,7 @@ export function record(state, update) {
     for (const f of ['observed', 'method', 'artifact', 'scope', 'checkedBy', 'session']) need(check[f], f);
     const observedAt = check.observedAt || stamp();
     if (!Number.isFinite(Date.parse(observedAt)) || Date.parse(observedAt) > Date.now() + 60000) throw Error('Observation timestamp is invalid or in the future');
-    const evidence = { ...check, at: observedAt, recordedAt: stamp(), recordedBy: update.recordedBy || update.session };
+    const evidence = { ...check, at: observedAt, recordedAt: stamp(), recordedBy: update.recordedBy || update.session, scopeVersion: row.scopeVersion, build: check.build || update.build || null };
     if (c.evidence?.at && Date.parse(c.evidence.at) > Date.parse(observedAt)) {
       c.history.push({ at: stamp(), verdict: check.verdict, evidence, lateArrival: true });
       continue; // Historical imports cannot overwrite a newer measurement.
@@ -346,7 +348,7 @@ export function summary(state) {
     recordedCost: state.runs.reduce((n, r) => n + (r.usage?.cost?.total || 0), 0), modelCalls: state.runs.length };
 }
 const line = s => String(s ?? '—').replaceAll('|', '\\|').replace(/\r?\n/g, ' ');
-const coverage = e => { const total = e.criteria.length, passed = e.criteria.filter(c => c.verdict === 'passed').length; return { total, passed, pct: total ? Math.round(100 * passed / total) : null }; };
+const coverage = e => { const total = e.criteria.length, passed = e.criteria.filter(c => c.verdict === 'passed' && freshness(c, c.__e || e).state === 'current').length; return { total, passed, pct: total ? Math.round(100 * passed / total) : null }; };
 export function markdown(state) {
   const s = summary(state);
   const lines = ['# Human expectations — intent versus measured delivery', '', `Project: ${state.project}`, `Last intake: ${s.lastScan ?? 'never'} · Last intent review: ${s.lastReview ?? 'never'} · Revision ${s.revision}`,
@@ -372,7 +374,7 @@ export function markdown(state) {
   for (const e of state.expectations) {
     lines.push('', `## ${e.id} — ${e.title}${e.supersededBy ? ` (superseded: ${e.supersededBy})` : ''}`, '', e.intent, '', `Holder: ${e.holder} · Scope version: ${e.scopeVersion} · MECE/source coverage: ${e.reconciled ? 'recorded review' : 'not yet audited'}`,
       '| Obligation | Verdict | Measured observation | Evidence / scope / checker |', '|---|---|---|---|');
-    for (const c of e.criteria) lines.push(`| ${c.id} ${line(c.obligation)} | ${c.verdict} | ${line(c.evidence?.observed || 'Not checked')} | ${line(c.evidence ? `${c.evidence.artifact}; ${c.evidence.scope}; ${c.evidence.checkedBy}; ${c.evidence.at}` : 'No measured evidence recorded')} |`);
+    for (const c of e.criteria) { const f = freshness(c, e); lines.push(`| ${c.id} ${line(c.obligation)} | ${c.verdict}${c.verdict === 'passed' && f.state !== 'current' ? ` (${f.state}: ${line(f.reason)})` : ''} | ${line(c.evidence?.observed || 'Not checked')} | ${line(c.evidence ? `${c.evidence.artifact}; ${c.evidence.scope}; ${c.evidence.checkedBy}; ${c.evidence.at}` : 'No measured evidence recorded')} |`); }
     lines.push('', '### Original human words');
     for (const source of e.sources) lines.push(`- ${source.timestamp} ⟦${source.ref}⟧: ${line(source.quote)}`);
   }
