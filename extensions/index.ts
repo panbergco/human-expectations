@@ -191,8 +191,12 @@ export default function humanExpectations(pi: ExtensionAPI) {
         const protocol = await readFile(join(root, 'PROMPT.md'), 'utf8');
         const model = ctx.model;
         if (!model) throw Error('Select a model before extracting intent');
-        for (let batchNumber = 0; batchNumber < (bootstrap ? 200 : 1); batchNumber++) {
+        const progress = (text: string) => { if (ctx.hasUI) ctx.ui.setStatus('human-expectations', text); };
+        const startedPending = status.pending, startedAt = Date.now(), startedCost = status.recordedCost || 0;
+        if (ctx.hasUI) ctx.ui.notify(`Explicit ${bootstrap ? 'backfill' : 'review'} started: ${status.pending} pending inputs. Progress shows in the status line; sources stay safe if you stop.`, 'info');
+        for (let batchNumber = 0; batchNumber < (bootstrap ? 400 : 1); batchNumber++) {
           if (abort.signal.aborted || stopped) break;
+          progress(`expectations ${bootstrap ? 'backfill' : 'review'}: batch ${batchNumber + 1} · ${status.pending} pending of ${startedPending} · $${((status.recordedCost || 0) - startedCost).toFixed(2)} · ${Math.round((Date.now() - startedAt) / 60000)} min`);
           const batch = await job(ctx, { op: 'prepare', ...(bootstrap ? { maxInputs: 120, maxBytes: Math.min(650000, Math.floor((model.contextWindow || 128000) * 0.6)) } : {}) });
           if (!batch.inputs.length) break;
           const { references: _references, ...reviewInput } = batch;
@@ -220,8 +224,9 @@ export default function humanExpectations(pi: ExtensionAPI) {
             }
           }
         }
-        if (!abort.signal.aborted && !stopped && status.pending === 0) status = await consolidateExplicit(ctx, abort.signal) || status;
-        return status;
+        if (!abort.signal.aborted && !stopped && status.pending === 0) { progress('expectations: consolidating the outcome hierarchy'); status = await consolidateExplicit(ctx, abort.signal) || status; }
+        progress(undefined as any);
+        return { done: `${startedPending - status.pending} inputs processed in ${Math.round((Date.now() - startedAt) / 60000)} min, $${((status.recordedCost || 0) - startedCost).toFixed(2)} reported; ${status.pending} pending remain`, ...status };
       } catch (error) {
         if (claimed) await job(ctx, { op: 'error', message: String(error) }).catch(() => {});
         throw error;

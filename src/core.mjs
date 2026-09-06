@@ -170,8 +170,10 @@ export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = fals
     ? { id: e.id, t: e.title.slice(0, 90) }
     : { id: e.id, title: e.title, intent: e.intent, kind: e.kind, supersededBy: e.supersededBy,
       criteria: e.criteria.map(c => ({ id: c.id, obligation: c.obligation, check: c.check })), latestSources: e.sources.slice(-2) });
-  let bytes = Buffer.byteLength(JSON.stringify(existing));
-  if (bytes > maxBytes * 0.8) throw Error(`Expectation index (${bytes} bytes) exceeds the review budget (${maxBytes}); use a larger-context model or consolidate the catalogue`);
+  const indexBytes = Buffer.byteLength(JSON.stringify(existing));
+  // A ridden turn carries the title index within its own allowance; inputs use maxBytes on top of it.
+  if (compact ? indexBytes > 40000 : indexBytes > maxBytes * 0.8) throw Error(`Expectation index (${indexBytes} bytes) exceeds the review budget (${maxBytes}); use a larger-context model or consolidate the catalogue`);
+  let bytes = compact ? 0 : indexBytes;
   const originByEntry = new Map(state.inputs.map(i => [JSON.stringify([i.entry, i.timestamp]), i.origin]));
   const pending = state.inputs.filter(i => !i.decision || i.decision.pendingIntent), missed = new Set(state.lastBatch?.missingRefs || []);
   const retry = pending.filter(i => missed.has(i.ref));
