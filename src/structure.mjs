@@ -65,7 +65,7 @@ export function drill(state, id) {
   };
   if (!id) return { level: 1, title: 'Outcomes', rows: (state.structure?.groups || [...byId.keys()]).map(n => describe(n, 1)) };
   const e = byId.get(id);
-  if (e) return { level: 3, id: e.id, title: e.title, intent: e.intent, kind: e.kind, ...bar(tagged(e)),
+  if (e) return { level: 3, id: e.id, title: e.title, intent: e.intent, kind: e.kind, holder: e.holder, ...bar(tagged(e)),
     checks: e.criteria.map(c => ({ id: c.id, obligation: c.obligation, verdict: c.verdict, freshness: freshness(c, e), observed: c.evidence?.observed || null, verifiedAt: c.evidence?.at || null, scope: c.evidence?.scope || null })),
     sources: e.sources.map(s => ({ ref: s.ref, when: s.timestamp, words: s.quote })) };
   for (const g of groupNodes(state.structure)) if (g.id === id) {

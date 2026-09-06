@@ -81,6 +81,10 @@ Create/review the hierarchy using `human_expectations` with `action: "structure"
 
 After approval, `/he split` materialises the reviewed hierarchy into an overview, linked `GX-*.md` group overviews and `HE-*.md` expectation details. Large unstructured reports refuse a split until the grouping exists. Stable expectation/check IDs do not change. `/he single` restores the full main report. Existing detail files remain as old generated views; do not treat them as competing state.
 
+## Verify: `/he audit`, then record
+
+`/he audit` (a whole outcome, up to 7 expectations) or `/he audit HE-0012` starts a turn in which the agent drives each obligation against the real project — commands, files, the running system, a driven user path — writes an audit file under `.human-expectations/audits/` and records verdicts with the tool. `--project <dir>` audits another project. During ordinary work, an agent that genuinely observed something settling an obligation may report it in the hidden block; it is recorded as an in-turn self-report with its own audit note. Nothing is ever recorded from memory or from transcript claims.
+
 ## Validate against hard delivery facts
 
 For each acceptance obligation, use ordinary project tools to obtain:

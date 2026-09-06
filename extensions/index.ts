@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { watch, type FSWatcher } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, relative } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
@@ -135,7 +135,24 @@ export default function humanExpectations(pi: ExtensionAPI) {
       contextSha256: createHash('sha256').update(current.text).digest('hex') };
     try {
       const result = decodeOutput(json);
-      if (current.kind === 'inputs') await job(ctx, { op: 'apply', batch: current.batch, result, run });
+      if (current.kind === 'inputs') {
+        const evidence = Array.isArray(result.evidence) ? result.evidence : [];
+        delete result.evidence;
+        await job(ctx, { op: 'apply', batch: current.batch, result, run });
+        for (const ev of evidence) {
+          try {
+            const { mkdir, appendFile } = await import('node:fs/promises');
+            const dir = join(project(ctx), '.human-expectations/audits'); await mkdir(dir, { recursive: true, mode: 0o700 });
+            const file = join(dir, `in-turn-${new Date().toISOString().slice(0, 10)}.md`);
+            await appendFile(file, `\n## ${ev.check} — ${ev.verdict} — ${new Date().toISOString()}\nSession ${ctx.sessionManager.getSessionId()} (self-report during ordinary work)\nObserved: ${ev.observed}\nMethod: ${ev.method}\nScope: ${ev.scope || 'this session'}\n`, { mode: 0o600 });
+            const status = await job(ctx, { op: 'status' });
+            const expectation = String(ev.check).replace(/\.\d+$/, '');
+            const row = await job(ctx, { op: 'report', node: expectation });
+            await job(ctx, { op: 'record', update: { revision: status.revision, expectation, holder: row.holder || 'unassigned', session: ctx.sessionManager.getSessionId(), recordedBy: ctx.sessionManager.getSessionId(),
+              checks: [{ id: ev.check, verdict: ev.verdict, observed: String(ev.observed), method: String(ev.method), artifact: relative(project(ctx), file), scope: String(ev.scope || 'this session'), checkedBy: ctx.sessionManager.getSessionId() + ' (in-turn self-report)', session: ctx.sessionManager.getSessionId() }] } });
+          } catch { /* evidence that does not validate is dropped; the obligation stays unknown */ }
+        }
+      }
       else await job(ctx, { op: 'structure', revision: current.input.revision, digest: current.input.digest, structure: result, run });
       rides.applied++;
     } catch (error) {
