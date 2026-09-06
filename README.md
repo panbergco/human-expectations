@@ -113,6 +113,20 @@ The `.human-expectations/` folder can contain your original words, contextual ex
 
 This public repository contains only reusable code and documentation. Saved test cases, real transcripts and project reports stay in their respective local project folders.
 
+## Measured, on a real 342-session project (2026-09-07)
+
+| What | Result |
+|---|---|
+| Extra model requests caused by the extension | 0 — bookkeeping rides your own turns |
+| Extra tokens on a ridden turn | within the per-turn budget (default 4,000) |
+| Outcome view (`/he report`) | 62 ms |
+| Saving after a ridden turn | 105 ms |
+| Reading unchanged history (342 sessions) | 1.2 s in a worker thread, 0 bytes re-read |
+| Full history intake (695 MB) | under 3 minutes, main thread p95 delay unchanged (1.1 ms) |
+| Whole-history backfill (6,346 inputs, Opus 5) | ~105 requests, ~2.5 h, $140 — now `--estimate` first, `--parallel 4`, ~57% smaller requests |
+
+Not measured yet: a week of ride overhead in daily use, and providers other than Anthropic and OpenAI-compatible endpoints.
+
 ## More detail
 
 - [Bundled method](SKILL.md) — how intent, decomposition, evidence and corrections are handled.
