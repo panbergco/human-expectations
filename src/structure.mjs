@@ -4,7 +4,9 @@ export function setStructure(state, plan) {
   if (!plan || typeof plan.dimension !== 'string' || !plan.dimension.trim() || !Array.isArray(plan.groups)) throw Error('Name one cut dimension and supply groups');
   const known = new Set(active(state).map(e => e.id)), used = new Set(), groupIds = new Set();
   function walk(nodes, top = false, depth = 0) {
-    if (depth > 10 || !Array.isArray(nodes) || nodes.length > 7 || nodes.length < (top && known.size < 3 ? known.size : 3)) throw Error('Groups must have 3–7 members; nest rather than widen');
+    // Three levels at most: outcomes → sub-outcomes → expectations. Checks sit under expectations and are not a grouping level.
+    if (depth > 1) throw Error('At most two grouping levels above expectations (outcome → sub-outcome → expectation)');
+    if (!Array.isArray(nodes) || nodes.length > 7 || nodes.length < (top && known.size < 3 ? known.size : 3)) throw Error('Groups must have 3–7 members; nest rather than widen');
     for (const node of nodes) {
       if (typeof node === 'string') {
         if (!known.has(node) || used.has(node)) throw Error('Unknown or multiply-owned expectation');
@@ -40,4 +42,31 @@ export function rollups(state) {
 
 export function groupNodes(plan) {
   return (plan?.groups || []).filter(n => typeof n !== 'string').flatMap(n => [n, ...groupNodes({ groups: n.children })]);
+}
+
+const bar = criteria => {
+  const total = criteria.length, passed = criteria.filter(c => c.verdict === 'passed').length, pct = total ? Math.round(100 * passed / total) : null;
+  const blocks = Math.floor((pct || 0) / 10);
+  return { passed, total, pct, bar: `${'█'.repeat(blocks)}${'░'.repeat(10 - blocks)} ${pct ?? '—'}% (${passed}/${total})` };
+};
+/** Drill-down view: level 1 = outcomes, level 2 = sub-outcomes, level 3 = expectations, then their checks. */
+export function drill(state, id) {
+  const byId = new Map(active(state).map(e => [e.id, e]));
+  const rowsOf = node => typeof node === 'string' ? (byId.has(node) ? [byId.get(node)] : []) : node.children.flatMap(rowsOf);
+  const describe = (node, level) => {
+    const rows = rowsOf(node), criteria = rows.flatMap(e => e.criteria);
+    const e = typeof node === 'string' ? byId.get(node) : null;
+    return { id: e ? e.id : node.id, level, kind: e ? 'expectation' : 'group', title: e ? e.title : node.title, ...bar(criteria),
+      unverified: criteria.filter(c => c.verdict !== 'passed').length, expectations: rows.length, children: e ? undefined : node.children.length };
+  };
+  if (!id) return { level: 1, title: 'Outcomes', rows: (state.structure?.groups || [...byId.keys()]).map(n => describe(n, 1)) };
+  const e = byId.get(id);
+  if (e) return { level: 3, id: e.id, title: e.title, intent: e.intent, kind: e.kind, ...bar(e.criteria),
+    checks: e.criteria.map(c => ({ id: c.id, obligation: c.obligation, verdict: c.verdict, observed: c.evidence?.observed || null, verifiedAt: c.evidence?.at || null, scope: c.evidence?.scope || null })),
+    sources: e.sources.map(s => ({ ref: s.ref, when: s.timestamp, words: s.quote })) };
+  for (const g of groupNodes(state.structure)) if (g.id === id) {
+    const level = (state.structure.groups || []).some(n => n === g || n.id === g.id) ? 2 : 3;
+    return { level, id: g.id, title: g.title, dimension: g.dimension, ...bar(rowsOf(g).flatMap(e => e.criteria)), rows: g.children.map(n => describe(n, level)) };
+  }
+  throw Error(`Unknown outcome, group or expectation ${id}`);
 }

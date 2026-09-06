@@ -58,9 +58,9 @@ The activation policy is:
 - **Project overrides:** a project can remain off even when global activation is on.
 
 ```text
-/human-expectations on            # this project
-/human-expectations on --global   # every project (still overridable per project)
-/human-expectations off           # this project, even if global is on
+/he on            # this project
+/he on --global   # every project (still overridable per project)
+/he off           # this project, even if global is on
 ```
 
 Installation availability is not activation. `status` shows the effective setting and where it comes from.
@@ -71,9 +71,20 @@ To inspect an existing project record, ask Pi:
 
 > “Show me my expectations and what is still unverified.”
 
-Or use `/human-expectations report` directly. `/human-expectations status` shows whether history is still pending and whether the last review encountered a problem. `/human-expectations off` stops automatic processing without deleting the record.
+Or drill down yourself:
 
-For a deliberate initial history review, `/human-expectations bootstrap` recovers recorded inputs, proposes expectations and checks, and organises a large record into a high-level overview. **This explicit pass makes separate model requests and can consume substantial quota on a long history; it only runs when you ask for it.** Without it, history is picked up gradually by your ordinary turns. `/human-expectations collect` reads new transcript text without any inference.
+```text
+/he report            outcomes with progress bars (3–7 lines)
+/he report GX-0100    one outcome: its sub-outcomes or expectations
+/he report HE-0080    one expectation: its checks, verification dates, your own words
+/he status            what is pending, what rode recent turns, last error
+```
+
+Levels appear only when a project needs them: a small project lists its expectations directly, a medium one gets outcomes, a large one gets outcomes and sub-outcomes — never more than that. Every verb autocompletes after `/he `, and the same operations exist as a terminal command (`he status`, `he report`, `he collect`, `he on|off`) for scripts and dashboards — the CLI never calls a model.
+
+`/he off` stops automatic processing without deleting the record.
+
+For a deliberate initial history review, `/he bootstrap` recovers recorded inputs, proposes expectations and checks, and organises a large record into a high-level overview. **This explicit pass makes separate model requests and can consume substantial quota on a long history; it only runs when you ask for it.** Without it, history is picked up gradually by your ordinary turns. `/he collect` reads new transcript text without any inference.
 
 What a ridden turn costs: up to about 12 KB of appended input plus a compact index of known outcome titles, and a short hidden output block — on that request only, never as an extra request.
 

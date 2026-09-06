@@ -39,6 +39,20 @@ export default function humanExpectations(pi: ExtensionAPI) {
     const part = truncateHead(typeof value === 'string' ? value : JSON.stringify(value, null, 2), { maxBytes: 20000, maxLines: 200 });
     return part.content + (part.truncated ? '\n[Truncated. Full records are in .human-expectations/.STATE.md; source results identify the original transcript and entry.]' : '');
   };
+  // Plain text drill-down: outcomes → sub-outcomes → expectation → checks. Only as many levels as the project has.
+  const tree = (view: any) => {
+    const lines: string[] = [];
+    if (view.checks) {
+      lines.push(`${view.id} · ${view.title}`, view.intent, `${view.bar} · ${view.kind}`, '');
+      for (const c of view.checks) lines.push(`  ${c.verdict === 'passed' ? '✔' : c.verdict === 'failed' ? '✖' : '·'} ${c.id} ${c.obligation}${c.verifiedAt ? ` — verified ${c.verifiedAt.slice(0, 10)}, ${c.scope}` : ''}`);
+      lines.push('', 'Human words:'); for (const s of view.sources.slice(-5)) lines.push(`  ${s.when.slice(0, 10)} "${s.words.slice(0, 160)}"`);
+      return lines.join('\n');
+    }
+    lines.push(view.id ? `${view.id} · ${view.title} — ${view.bar}` : 'Outcomes — verified checks / all checks', '');
+    for (const r of view.rows) lines.push(`  ${r.id} · ${r.title}`, `      ${r.bar}${r.kind === 'group' ? ` · ${r.expectations} expectations` : ''} · ${r.unverified} unverified`);
+    lines.push('', 'Drill down: /he report <id> · full Markdown: /he report full');
+    return lines.join('\n');
+  };
   const show = (ctx: ExtensionContext, value: unknown) => pi.sendMessage({ customType: 'human-expectations:report', content: compact(value), display: true }, { triggerTurn: false });
 
   // ---- Mechanical background: collect appended transcript bytes only. Never inference. ----
@@ -260,7 +274,23 @@ export default function humanExpectations(pi: ExtensionAPI) {
     }
   }
 
-  pi.registerCommand('human-expectations', {
+  const VERBS: Record<string, string> = {
+    on: 'enable for this project (add --global for all projects)', off: 'disable here (wins over global)', status: 'intake, pending, rides, cost',
+    report: 'outcome overview; report this|<session-id> for one session', collect: 'read new transcript text, no inference',
+    bootstrap: 'explicit paid pass over pending history', review: 'explicit paid pass, one batch', split: 'overview + linked detail files', single: 'one report file',
+  };
+  const command = {
+    getArgumentCompletions: (prefix: string) => {
+      const words = prefix.split(/\s+/);
+      if (words.length > 1) {
+        const verb = words[0], tail = words.at(-1) || '';
+        const options = verb === 'report' ? ['this'] : verb === 'on' ? ['--global', '30', '60'] : verb === 'off' ? ['--global'] : [];
+        const items = options.filter(o => o.startsWith(tail)).map(o => ({ value: `${words.slice(0, -1).join(' ')} ${o}`, label: o }));
+        return items.length ? items : null;
+      }
+      const items = Object.entries(VERBS).filter(([v]) => v.startsWith(prefix)).map(([v, d]) => ({ value: v, label: v, description: d }));
+      return items.length ? items : null;
+    },
     description: 'on|off [--global] [minutes], status, report [session|this], collect, bootstrap [transcript] (explicit paid pass), split, single',
     handler: async (args, ctx) => {
       const words = args.trim().split(/\s+/).filter(Boolean);
@@ -270,34 +300,52 @@ export default function humanExpectations(pi: ExtensionAPI) {
         if (action === 'on' || action === 'off') {
           if (action === 'off') { controller?.abort(); await active?.catch(() => {}); if (timer) clearTimeout(timer); timer = undefined; await releaseRide(ctx); }
           const minutes = rest[0] ? Number(rest[0]) : 30;
-          const status = await job(ctx, { op: 'configure', enabled: action === 'on', minutes, scope: global ? 'global' : 'project' });
+          let backfill: string | undefined;
+          if (action === 'on' && !global) {
+            const current = await job(ctx, { op: 'status' });
+            if (!current.backfill) {
+              const options = [
+                'No backfill — remember only what is said from now on',
+                'This session only — include this conversation\'s history, new sessions from now on',
+                'Full history — every session of this project (large projects: hours of ordinary turns, or an explicit paid pass)',
+              ];
+              const choice = ctx.hasUI ? await ctx.ui.select('History to include (↑/↓ or space to move, Enter to choose):', options) : options[0];
+              if (!choice) { show(ctx, 'Activation cancelled; nothing changed.'); return; }
+              backfill = ['none', 'session', 'all'][options.indexOf(choice)];
+            }
+          }
+          const status = await job(ctx, { op: 'configure', enabled: action === 'on', minutes, scope: global ? 'global' : 'project', backfill, sessionFile: ctx.sessionManager.getSessionFile?.() });
           enabled = !!status.enabled;
           if (enabled) { startWatching(ctx); mark(ctx); } else stopWatching();
           show(ctx, `${global ? 'Global' : 'Project'} setting: ${action}. Effective here: ${status.enabled ? 'on' : 'off'} (${status.activation}).\n` +
-            (status.enabled ? 'Bookkeeping rides your own turns in small bounded pieces; it never starts a model request of its own. A project-level off always wins over global on.' : 'The Markdown record is retained. Nothing runs until re-enabled.'));
+            (status.enabled ? `History: ${status.backfill || 'all'}. Bookkeeping rides your own turns in small bounded pieces; it never starts a model request of its own. A project-level off always wins over global on. Explicit paid passes stay opt-in: /he bootstrap.` : 'The Markdown record is retained. Nothing runs until re-enabled.'));
         } else if (action === 'collect') {
           show(ctx, await collect(ctx, rest.length ? rest.join(' ') : undefined));
         } else if (action === 'review' || action === 'bootstrap') {
           show(ctx, await explicitPass(ctx, action === 'bootstrap', rest.length ? rest.join(' ') : undefined));
         } else if (action === 'report') {
-          const session = rest[0] === 'this' ? ctx.sessionManager.getSessionId() : rest[0];
-          const result = await job(ctx, { op: 'report', session });
-          if (session) { show(ctx, result.sessionActivity); return; }
-          const text = await readFile(result.report, 'utf8');
-          show(ctx, text.split(/\n## HE-/)[0] + `\n\nFull Markdown: ${result.report}` + (text.length > 60000 ? '\nLarge report: /human-expectations split offers an outcome-based overview and linked detail files.' : ''));
+          const arg = rest[0];
+          if (arg === 'this' || (arg && /^[0-9a-f]{8}/.test(arg) && !/^(HE|GX)-/.test(arg))) {
+            const result = await job(ctx, { op: 'report', session: arg === 'this' ? ctx.sessionManager.getSessionId() : arg });
+            show(ctx, result.sessionActivity); return;
+          }
+          if (arg === 'full') { const result = await job(ctx, { op: 'report' }); show(ctx, `Full Markdown: ${result.report}`); return; }
+          show(ctx, tree(await job(ctx, { op: 'report', node: arg || null })));
         } else if (action === 'split' || action === 'single') {
           show(ctx, await job(ctx, { op: 'layout', split: action === 'split' }));
         } else if (action === 'status') show(ctx, { ...await job(ctx, { op: 'status' }), thisSession: { enabled, rides } });
-        else throw Error('Use on|off [--global] [minutes], status, report, collect, bootstrap [transcript], split or single');
+        else throw Error('Use /he on|off [--global] [minutes], status, report, collect, bootstrap [transcript], split or single');
       } catch (error) { if (ctx.hasUI) ctx.ui.notify(String(error), 'error'); }
     },
-  });
+  };
+  pi.registerCommand('he', command);
+  pi.registerCommand('human-expectations', { ...command, description: 'Alias of /he' });
   pi.registerTool({
     name: 'human_expectations', label: 'Human expectations',
     description: 'Read project-wide intent, sources and coverage; record measured acceptance evidence; review a MECE hierarchy. Never treats a transcript claim as proof. Responses bounded to 20KB/200 lines. Read the bundled human-expectations skill for MECE and source-authority rules.',
     parameters: Type.Object({
       action: StringEnum(['report', 'status', 'source', 'record', 'structure'] as const),
-      ref: Type.Optional(Type.String()), session: Type.Optional(Type.String({ description: 'Report: full/unique-prefix session ID, or this. Verification activity, not inferred implementation credit.' })), revision: Type.Optional(Type.Integer()),
+      ref: Type.Optional(Type.String()), node: Type.Optional(Type.String({ description: 'Report drill-down: omit for outcomes, GX-id for a group, HE-id for one expectation with its checks and sources.' })), session: Type.Optional(Type.String({ description: 'Report: full/unique-prefix session ID, or this. Verification activity, not inferred implementation credit.' })), revision: Type.Optional(Type.Integer()),
       structure: Type.Optional(Type.Any({ description: 'MECE hierarchy: {dimension, groups}. Each node is an HE-id or {id:GX-0001,title,dimension,children}; 3–7 members per group, every active HE-id exactly once.' })),
       update: Type.Optional(Type.Object({
         revision: Type.Integer(), expectation: Type.String(), holder: Type.String(), session: Type.String(),
@@ -309,7 +357,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
     async execute(_id, params, signal, _update, ctx) {
       signal?.throwIfAborted();
       const update = params.update ? { ...params.update, recordedBy: ctx.sessionManager.getSessionId() } : undefined;
-      const result = await job(ctx, { op: params.action, ref: params.ref, update, revision: params.revision, structure: params.structure, session: params.session === 'this' ? ctx.sessionManager.getSessionId() : params.session });
+      const result = await job(ctx, { op: params.action, ref: params.ref, node: params.action === 'report' && params.node !== undefined ? params.node : undefined, update, revision: params.revision, structure: params.structure, session: params.session === 'this' ? ctx.sessionManager.getSessionId() : params.session });
       return { content: [{ type: 'text', text: compact(result) }], details: {} };
     },
   });

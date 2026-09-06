@@ -79,7 +79,7 @@ export function origin(text, prefixes = []) {
 }
 
 /** Full first read; appended bytes thereafter. Compact nodes let context follow branches across batches. */
-export async function scan(state, file, prefixes = []) {
+export async function scan(state, file, prefixes = [], scope = {}) {
   file = resolve(file);
   const info = await stat(file).catch(e => { if (e.code === 'ENOENT') return null; throw e; });
   if (!info) return { added: 0, bytes: 0 };
@@ -108,6 +108,8 @@ export async function scan(state, file, prefixes = []) {
         const text = ['user', 'assistant'].includes(role) ? textOf(e.message.content) : '';
         cursor.nodes[e.id] = { id: e.id, parentId: e.parentId, role, text: text.slice(-1800), truncated: text.length > 1800, timestamp: e.timestamp };
         if (role !== 'user') continue;
+        // Backfill scope chosen at activation: 'none' keeps only what is said from now on; 'session' exempts one transcript.
+        if (scope.since && e.timestamp < scope.since && (scope.backfill !== 'session' || file !== scope.sessionFile)) continue;
         const ref = `${cursor.header.id}/${e.id}`;
         if (seenRefs.has(ref)) {
           if (seenRefs.get(ref) !== text) throw Error(`Previously captured source ${ref} was rewritten; explicit reconciliation required`);

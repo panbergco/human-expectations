@@ -4,11 +4,45 @@
   "description": "Reconcile human intent with measurable delivery across pi sessions.",
   "type": "module",
   "license": "MIT",
-  "keywords": ["pi-package", "expectations", "intent"],
-  "repository": { "type": "git", "url": "https://github.com/panbergco/human-expectations.git" },
-  "pi": { "extensions": ["./extensions/index.ts"], "skills": ["./SKILL.md"] },
-  "files": ["extensions", "src", "SKILL.md", "PROMPT.md", "README.md", "LICENSE"],
-  "scripts": { "check": "node --check extensions/index.ts && node --check src/core.mjs && node --check src/worker.mjs" },
-  "engines": { "node": ">=24" },
-  "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-ai": "*", "typebox": "*" }
+  "keywords": [
+    "pi-package",
+    "expectations",
+    "intent"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/panbergco/human-expectations.git"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ],
+    "skills": [
+      "./SKILL.md"
+    ]
+  },
+  "files": [
+    "extensions",
+    "src",
+    "bin",
+    "SKILL.md",
+    "PROMPT.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "node --check extensions/index.ts && node --check src/core.mjs && node --check src/worker.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "typebox": "*"
+  },
+  "bin": {
+    "human-expectations": "./bin/he.mjs",
+    "he": "./bin/he.mjs"
+  }
 }

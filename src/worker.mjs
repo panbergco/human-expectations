@@ -5,7 +5,7 @@ import { readFile, writeFile, mkdir, unlink, realpath, readdir, open, stat } fro
 import { join, parse, resolve, relative, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { directory, document, load, lock, save, scan, prepare, reconcile, record, summary, exchange, safeDirectory, readRecord, atomic } from './core.mjs';
-import { setStructure } from './structure.mjs';
+import { setStructure, drill } from './structure.mjs';
 import { sessionActivity } from './activity.mjs';
 import { consolidationInput } from './consolidation.mjs';
 
@@ -60,6 +60,10 @@ async function execute(job) {
   }
   if (job.op === 'configure') return lock(project, '.writer-lock', async () => {
     const config = { ...await readRecord(configPath, {}), enabled: job.enabled, minutes: job.minutes };
+    if (job.backfill) {
+      if (!['none', 'session', 'all'].includes(job.backfill)) throw Error('Backfill scope must be none, session or all');
+      Object.assign(config, { backfill: job.backfill, since: job.backfill === 'all' ? null : new Date().toISOString(), sessionFile: job.sessionFile || null });
+    }
     if (!Number.isFinite(config.minutes) || config.minutes < 1 || config.minutes > 1440) throw Error('Minutes must be 1–1440');
     if (job.automationPrefixes) {
       if (!Array.isArray(job.automationPrefixes) || job.automationPrefixes.some(s => typeof s !== 'string' || s.length < 8)) throw Error('Automation prefixes must be explicit strings of at least 8 characters');
@@ -85,6 +89,7 @@ async function execute(job) {
   if (job.op === 'report') return lock(project, '.writer-lock', async () => {
     const state = await load(project);
     const activity = job.session ? sessionActivity(state, job.session) : undefined;
+    if (job.node !== undefined) return drill(state, job.node || undefined);
     await save(state); return { ...summary(state), ...(activity ? { sessionActivity: activity } : {}), report: join(dir, 'EXPECTATIONS.md') };
   });
   return lock(project, '.writer-lock', async () => {
@@ -95,7 +100,7 @@ async function execute(job) {
       detail = { added: 0, bytes: 0, sessionsDiscovered: files.length };
       for (const file of files) {
         if (job.files && !(await stat(file)).isFile()) throw Error(`Explicit transcript is not a file: ${file}`);
-        const r = await scan(state, file, config.automationPrefixes || []); detail.added += r.added; detail.bytes += r.bytes;
+        const r = await scan(state, file, config.automationPrefixes || [], config); detail.added += r.added; detail.bytes += r.bytes;
       }
       // Without authenticated sender evidence, routed/replayed text cannot become human authority.
       for (const i of state.inputs) if (!i.decision && i.origin === 'routed-unverified') i.decision = {

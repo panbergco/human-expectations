@@ -21,11 +21,11 @@ A source link records the immutable session UUID plus entry ID, timestamp and or
 
 ### Triggers and cost
 
-`/human-expectations on [minutes]` opts this project in; `/human-expectations on --global` opts every project in; a project-level `off` always wins over a global `on`. Nothing runs until enabled. `/human-expectations status` reports the effective setting and its source.
+`/he on [minutes]` opts this project in; `/he on --global` opts every project in; a project-level `off` always wins over a global `on`. Nothing runs until enabled. `/he status` reports the effective setting and its source.
 
 Automatic mode never starts a model request. Background work is mechanical only: native file notifications and observer-only session events mark changes, and a worker thread reads appended transcript bytes at most once per interval (default 30 minutes). Interpretation rides a turn the human already started: a bounded bookkeeping instruction (≤ 6 source inputs / ≤ 12 KB, plus a compact index of known outcome titles) is appended to the tail of the model input for that request only. It is not persisted, it does not change the system prompt or the cached prefix, and the model's answer to the user is unaffected. The model appends one hidden data block at the end of its answer; the extension validates it, stores the result, and strips the block from the transcript and the display. If the model omits or malforms the block, the sources simply stay pending for a later turn — there is no repair request, no retry request, and no follow-up turn. Consolidation into the outcome hierarchy rides a turn the same way when the catalogue is small enough (≤ 40 KB); otherwise it waits for an explicit pass.
 
-The only separate model requests are explicit, user-invoked passes: `/human-expectations bootstrap [transcript]` (whole pending history, batched) and `/human-expectations review` (one batch). Both say so and record their usage. `/human-expectations collect [transcript]` reads sources without any inference. One project-wide lease prevents two sessions from carrying the same batch.
+The only separate model requests are explicit, user-invoked passes: `/he bootstrap [transcript]` (whole pending history, batched) and `/he review` (one batch). Both say so and record their usage. `/he collect [transcript]` reads sources without any inference. One project-wide lease prevents two sessions from carrying the same batch.
 
 There is **no zero-overhead guarantee**: the ridden turn carries extra input tokens and a short extra output block; static tool/skill definitions occupy prompt space; workers use CPU/memory. Nothing else is touched: no injected turns, no replaced tools/prompts/models/thinking settings, no UI beyond what is explicitly requested.
 
@@ -79,7 +79,7 @@ File size may prompt the offer, but boundaries follow the decomposition: one cut
 
 Create/review the hierarchy using `human_expectations` with `action: "structure"`, the latest `revision`, and `structure: {dimension, groups}`. A node is an existing HE-id (a leaf) or `{id: "GX-0001", title: "governing conclusion", dimension: "one child cut dimension", children: [...]}`. Every active expectation must occur exactly once; each internal group holds 3–7 members. New intent that arrives later is visibly unplaced until reconciled; never hide it to preserve an old outline.
 
-After approval, `/human-expectations split` materialises the reviewed hierarchy into an overview, linked `GX-*.md` group overviews and `HE-*.md` expectation details. Large unstructured reports refuse a split until the grouping exists. Stable expectation/check IDs do not change. `/human-expectations single` restores the full main report. Existing detail files remain as old generated views; do not treat them as competing state.
+After approval, `/he split` materialises the reviewed hierarchy into an overview, linked `GX-*.md` group overviews and `HE-*.md` expectation details. Large unstructured reports refuse a split until the grouping exists. Stable expectation/check IDs do not change. `/he single` restores the full main report. Existing detail files remain as old generated views; do not treat them as competing state.
 
 ## Validate against hard delivery facts
 
