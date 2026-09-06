@@ -261,7 +261,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
             try {
               const inputData = JSON.stringify({ ...reviewInput, repair });
               const response = await ctx.modelRegistry.complete(model, { systemPrompt: protocol, messages: [{ role: 'user', content: inputData, timestamp: Date.now() }] },
-                { signal: AbortSignal.any([abort.signal, AbortSignal.timeout(Math.min(1800000, (bootstrap ? 300000 : 120000) + Buffer.byteLength(inputData) / 100))]), maxTokens: bootstrap ? Math.min(32000, model.maxTokens || 32000) : Math.min(12000, model.maxTokens || 12000), reasoningEffort: 'low', sessionId: randomUUID() });
+                { signal: AbortSignal.any([abort.signal, AbortSignal.timeout(Math.round(Math.min(1800000, (bootstrap ? 300000 : 120000) + Buffer.byteLength(inputData) / 100)))]), maxTokens: bootstrap ? Math.min(32000, model.maxTokens || 32000) : Math.min(12000, model.maxTokens || 12000), reasoningEffort: 'low', sessionId: randomUUID() });
               run = { id: randomUUID(), at: new Date().toISOString(), mode: 'explicit-pass', model: `${model.provider}/${model.id}`, usage: response.usage, inputs: batch.inputs.length,
                 sourceRefs: batch.inputs.map((i: { ref: string }) => batch.references?.[i.ref] || i.ref), contextSha256: createHash('sha256').update(protocol + '\0' + inputData).digest('hex') };
               const calls = response.content.filter(b => b.type === 'toolCall');
