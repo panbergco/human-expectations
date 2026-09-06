@@ -86,12 +86,13 @@ async function execute(job) {
     const state = await load(project), item = state.inputs.find(i => i.ref === job.ref);
     if (!item) throw Error('Unknown source'); return { item, exchange: exchange(state, item) };
   }
-  if (job.op === 'report') return lock(project, '.writer-lock', async () => {
+  if (job.op === 'report') {
+    // Readers never take the writer lock; every writer already regenerates EXPECTATIONS.md on save.
     const state = await load(project);
     const activity = job.session ? sessionActivity(state, job.session) : undefined;
     if (job.node !== undefined) return drill(state, job.node || undefined);
-    await save(state); return { ...summary(state), ...(activity ? { sessionActivity: activity } : {}), report: join(dir, 'EXPECTATIONS.md') };
-  });
+    return { ...summary(state), ...(activity ? { sessionActivity: activity } : {}), report: join(dir, 'EXPECTATIONS.md') };
+  }
   return lock(project, '.writer-lock', async () => {
     let state = await load(project), detail = {};
     if (job.op === 'scan') {

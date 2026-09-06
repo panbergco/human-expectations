@@ -47,7 +47,16 @@ export async function lock(project, name, fn) {
   const dir = await safeDirectory(project);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, name + '.md');
-  const f = await open(path, 'wx', 0o600).catch(e => { if (e.code === 'EEXIST') throw Error(`Busy: ${path}; after a crash verify the recorded PID is dead before removing this lock`); throw e; });
+  // Short writers: wait up to 10 s for a live lock instead of failing the caller outright.
+  let f; const deadline = Date.now() + 10000;
+  for (;;) {
+    try { f = await open(path, 'wx', 0o600); break; }
+    catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      if (Date.now() > deadline) throw Error(`Busy: ${path}; after a crash verify the recorded PID is dead before removing this lock`);
+      await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+    }
+  }
   try { await f.writeFile(document({ pid: process.pid, at: stamp() })); return await fn(); }
   finally { await f.close(); await unlink(path); }
 }
@@ -364,7 +373,7 @@ export function markdown(state) {
       return `${'█'.repeat(blocks)}${'░'.repeat(10 - blocks)} ${pct ?? '—'}% (${passed}/${total})`;
     };
     const progress = e.kind === 'mixed'
-      ? `Outcomes ${showBar(e.rows.filter(r => r.kind === 'outcome').flatMap(r => r.criteria))}; standing compliance ${showBar(e.rows.filter(r => r.kind === 'standing').flatMap(r => r.criteria))}`
+      ? `Outcomes ${showBar(e.rows.filter(r => r.kind === 'outcome').flatMap(r => r.criteria.map(c => ({ ...c, __e: r }))))}; standing compliance ${showBar(e.rows.filter(r => r.kind === 'standing').flatMap(r => r.criteria.map(c => ({ ...c, __e: r }))))}`
       : showBar(e.criteria);
     const verified = e.criteria.filter(c => c.verdict === 'passed' && c.evidence?.at).map(c => c.evidence.at).sort();
     const latestWords = e.rows.flatMap(r => r.sources.map(x => x.timestamp)).sort().at(-1);

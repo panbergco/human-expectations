@@ -10,7 +10,8 @@ export const STATES = ['current', 'stale', 'historical', 'unknown', 'needs-revie
 export function freshness(c, e, now = {}) {
   if (!c.evidence || c.verdict === 'unknown') return { state: 'unknown', reason: 'no accepted measurement' };
   const at = c.evidence.at;
-  const latestWords = e.sources.map(s => s.timestamp).sort().at(-1);
+  if (!e) return { state: 'unknown', reason: 'no owning expectation supplied' };
+  const latestWords = (e.sources || []).map(s => s.timestamp).sort().at(-1);
   if (c.evidence.scopeVersion !== undefined && c.evidence.scopeVersion !== e.scopeVersion) return { state: 'stale', reason: `obligation scope changed after this measurement (v${c.evidence.scopeVersion} → v${e.scopeVersion})` };
   if (e.challengedAt && e.challengedAt > at) return { state: 'needs-review', reason: `the human challenged this outcome on ${e.challengedAt.slice(0, 10)}, after the measurement` };
   if (latestWords && latestWords > at) return { state: 'stale', reason: `a later human statement (${latestWords.slice(0, 10)}) may have changed what is expected` };
