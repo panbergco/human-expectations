@@ -374,13 +374,14 @@ export function sourceStats(state) {
   for (const i of state.inputs) { const label = i.decision?.origin || i.origin; originCounts[label] = (originCounts[label] || 0) + 1; }
   return { inputs: state.inputs.length, pending: state.inputs.filter(i => !i.decision || i.decision.pendingIntent).length,
     needsContext: state.inputs.filter(i => i.decision?.nature === 'needs-context' || i.decision?.origin === 'uncertain' || i.decision?.needsReview).length,
+    withImages: state.inputs.filter(i => i.hasImages && (!i.decision || i.decision.nature === 'needs-context')).length,
     originCounts, sessions: new Set(Object.values(state.files || {}).map(f => f.header?.id).filter(Boolean)).size, sourceFiles: Object.keys(state.files || {}).length };
 }
 export function summary(state) {
   const st = Array.isArray(state.inputs) ? sourceStats(state) : (state.sourceStats || { inputs: 0, pending: 0, needsContext: 0, originCounts: {}, sessions: 0, sourceFiles: 0 });
   const verdicts = { passed: 0, failed: 0, blocked: 0, unknown: 0 };
   for (const e of state.expectations.filter(e => !e.supersededBy && e.kind === 'outcome')) for (const c of e.criteria) verdicts[c.verdict]++;
-  return { revision: state.revision, inputs: st.inputs, pending: st.pending, needsContext: st.needsContext,
+  return { revision: state.revision, inputs: st.inputs, pending: st.pending, needsContext: st.needsContext, withImages: st.withImages || 0,
     unverifiedProposals: state.unverifiedProposals?.length || 0,
     expectations: state.expectations.length, outcomeGroups: rollups(state).length,
     sessions: st.sessions, sourceFiles: st.sourceFiles,

@@ -363,6 +363,10 @@ export default function humanExpectations(pi: ExtensionAPI) {
           const status = await job(ctx, { op: 'configure', enabled: action === 'on', minutes, scope: global ? 'global' : 'project', backfill, budgetTokens, sessionFile: ctx.sessionManager.getSessionFile?.() });
           enabled = !!status.enabled;
           if (enabled) { startWatching(ctx); mark(ctx); } else stopWatching();
+          if (action === 'on') {
+            try { const { execSync } = await import('node:child_process'); execSync('git check-ignore -q .human-expectations/.STATE.md', { cwd: project(ctx), stdio: 'ignore' }); }
+            catch { if (ctx.hasUI) ctx.ui.notify('.human-expectations/ is not Git-ignored in this project. Add it to .gitignore (or .git/info/exclude) before committing — it contains your own words.', 'warning'); }
+          }
           show(ctx, `${global ? 'Global' : 'Project'} setting: ${action}. Effective here: ${status.enabled ? 'on' : 'off'} (${status.activation}).\n` +
             (status.enabled ? `History: ${status.backfill || 'all'} · per-turn budget ${status.budgetTokens || DEFAULT_BUDGET_TOKENS} tokens. Bookkeeping rides your own turns in small bounded pieces; it never starts a model request of its own. A project-level off always wins over global on. Explicit paid passes stay opt-in: /he bootstrap.` : 'The Markdown record is retained. Nothing runs until re-enabled.'));
         } else if (action === 'collect') {
@@ -425,7 +429,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
           show(ctx, [
             `Human expectations — ${project(ctx)}`,
             `Active: ${s.enabled ? 'on' : 'off'} (${s.activation}) · history: ${s.backfill || 'all'} · intake every ${s.minutes} min · per-turn budget ${s.budgetTokens || DEFAULT_BUDGET_TOKENS} tokens`,
-            `Record: ${s.expectations ?? 0} expectations in ${s.outcomeGroups ?? 0} outcomes · ${s.inputs ?? 0} inputs from ${s.sessions ?? 0} sessions · ${s.pending ?? 0} pending · ${s.needsContext ?? 0} need context · ${s.unverifiedProposals ?? 0} held proposals`,
+            `Record: ${s.expectations ?? 0} expectations in ${s.outcomeGroups ?? 0} outcomes · ${s.inputs ?? 0} inputs from ${s.sessions ?? 0} sessions · ${s.pending ?? 0} pending · ${s.needsContext ?? 0} need context${s.withImages ? ` (${s.withImages} with images a human must interpret)` : ''} · ${s.unverifiedProposals ?? 0} held proposals`,
             `Verified: ${v.passed ?? 0} passed · ${v.failed ?? 0} failed · ${v.blocked ?? 0} blocked · ${v.unknown ?? 0} unknown (outcome checks)`,
             `Last intake: ${when(s.lastScan)} · last review: ${when(s.lastReview)} · last error: ${s.lastError ? s.lastError.split('\n')[0].slice(0, 120) : 'none'}`,
             `This session: rides armed ${rides.armed} · carried ${rides.carried} · answered ${rides.answered} · applied ${rides.applied} · rejected ${rides.rejected} · missed ${rides.missed}`,
