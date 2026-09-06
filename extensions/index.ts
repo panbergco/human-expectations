@@ -29,7 +29,8 @@ export default function humanExpectations(pi: ExtensionAPI) {
 
   pi.registerFlag('he-project', { type: 'string', description: 'Explicit project to inspect (otherwise current cwd)' });
   const agentDir = () => process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi/agent');
-  const project = (ctx: ExtensionContext) => resolve(String(pi.getFlag('he-project') || ctx.cwd));
+  let projectOverride: string | undefined; // set per command by --project <dir>
+  const project = (ctx: ExtensionContext) => resolve(String(projectOverride || pi.getFlag('he-project') || ctx.cwd));
   const roots = (ctx: ExtensionContext) => [join(agentDir(), 'sessions'), ctx.sessionManager.getSessionDir()];
   const job = (ctx: ExtensionContext, data: Record<string, unknown>) => {
     if (!ctx.isProjectTrusted()) throw Error('Trust the current project before using human expectations');
@@ -284,7 +285,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
       const words = prefix.split(/\s+/);
       if (words.length > 1) {
         const verb = words[0], tail = words.at(-1) || '';
-        const options = verb === 'report' ? ['this'] : verb === 'on' ? ['--global', '30', '60'] : verb === 'off' ? ['--global'] : [];
+        const options = (verb === 'report' ? ['this', '--project'] : verb === 'on' ? ['--global', '--project', '30', '60'] : verb === 'off' ? ['--global', '--project'] : ['--project']);
         const items = options.filter(o => o.startsWith(tail)).map(o => ({ value: `${words.slice(0, -1).join(' ')} ${o}`, label: o }));
         return items.length ? items : null;
       }
@@ -295,6 +296,8 @@ export default function humanExpectations(pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const words = args.trim().split(/\s+/).filter(Boolean);
       const global = words.includes('--global');
+      const at = words.indexOf('--project');
+      projectOverride = at >= 0 ? words.splice(at, 2)[1] : undefined;
       const [action = 'report', ...rest] = words.filter(w => w !== '--global');
       try {
         if (action === 'on' || action === 'off') {
@@ -338,7 +341,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
           if (!targets.length) throw Error('Pick a group with expectations or one HE-id: /he audit HE-0001');
           const status = await job(ctx, { op: 'status' });
           const brief = [
-            `AUDIT of ${targets.length} expectation(s) against this project — establish what is actually delivered, not what was claimed.`,
+            `AUDIT of ${targets.length} expectation(s) against the project at ${project(ctx)} — run every command and read every file THERE (cd into it); establish what is actually delivered, not what was claimed.`,
             `For every check below: obtain real evidence with the project's own tools (commands, files, the running system, a driven user path). State the method, the scope (build/commit, environment, time window) and the measured observation. A commit, a green test on the wrong layer, or an assistant's "done" is not evidence. If it cannot be observed, the verdict is unknown or blocked — never passed.`,
             `Write your observations to .human-expectations/audits/<HE-id>-${new Date().toISOString().slice(0, 10)}.md (Markdown), then record each verdict with the human_expectations tool: action "record", revision ${status.revision}, expectation <HE-id>, holder "unassigned" unless the record names one, session "${ctx.sessionManager.getSessionId()}", checks [{id, verdict, observed, method, artifact (that audit file), scope, checkedBy "${ctx.sessionManager.getSessionId()} (self-check)", session}]. Re-read status for the current revision before each record call. Do not edit expectations or invent thresholds; if a check is ambiguous, say so in the audit file and leave it unknown.`,
             '', ...targets.map((t: any) => `## ${t.id} — ${t.title}\n${t.intent}\n` + t.checks.map((c: any) => `- ${c.id} [${c.verdict}] ${c.obligation}`).join('\n')),
@@ -362,6 +365,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
         }
         else throw Error('Use /he on|off [--global] [minutes], status, report [id], audit [id], collect, bootstrap [transcript], split or single');
       } catch (error) { if (ctx.hasUI) ctx.ui.notify(String(error), 'error'); }
+      finally { projectOverride = undefined; }
     },
   };
   pi.registerCommand('he', command);
