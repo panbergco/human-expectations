@@ -115,7 +115,8 @@ export default function humanExpectations(pi: ExtensionAPI) {
   }
   async function applyRide(ctx: ExtensionContext, json: string) {
     const current = ride; if (!current) return;
-    const run = { id: randomUUID(), at: new Date().toISOString(), kind: current.kind, mode: 'ridden-turn', usage: null,
+    const run = { id: randomUUID(), at: new Date().toISOString(), kind: current.kind, mode: 'ridden-turn', usage: null, model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : null,
+      session: ctx.sessionManager.getSessionId(), sourceRefs: current.batch ? current.batch.inputs.map((i: { ref: string }) => current.batch.references?.[i.ref] || i.ref) : [],
       contextSha256: createHash('sha256').update(current.text).digest('hex') };
     try {
       const result = decodeOutput(json);
@@ -192,7 +193,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
         if (!model) throw Error('Select a model before extracting intent');
         for (let batchNumber = 0; batchNumber < (bootstrap ? 200 : 1); batchNumber++) {
           if (abort.signal.aborted || stopped) break;
-          const batch = await job(ctx, { op: 'prepare', ...(bootstrap ? { maxInputs: 96, maxBytes: Math.min(350000, (model.contextWindow || 128000) * 1.2) } : {}) });
+          const batch = await job(ctx, { op: 'prepare', ...(bootstrap ? { maxInputs: 120, maxBytes: Math.min(650000, Math.floor((model.contextWindow || 128000) * 0.6)) } : {}) });
           if (!batch.inputs.length) break;
           const { references: _references, ...reviewInput } = batch;
           let repair: { validationError: string; rejectedOutput: string } | undefined;
@@ -201,7 +202,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
             try {
               const inputData = JSON.stringify({ ...reviewInput, repair });
               const response = await ctx.modelRegistry.complete(model, { systemPrompt: protocol, messages: [{ role: 'user', content: inputData, timestamp: Date.now() }] },
-                { signal: AbortSignal.any([abort.signal, AbortSignal.timeout(bootstrap ? 240000 : 120000)]), maxTokens: bootstrap ? Math.min(32000, model.maxTokens || 32000) : Math.min(12000, model.maxTokens || 12000), reasoningEffort: 'low', sessionId: randomUUID() });
+                { signal: AbortSignal.any([abort.signal, AbortSignal.timeout(bootstrap ? 1200000 : 180000)]), maxTokens: bootstrap ? Math.min(32000, model.maxTokens || 32000) : Math.min(12000, model.maxTokens || 12000), reasoningEffort: 'low', sessionId: randomUUID() });
               run = { id: randomUUID(), at: new Date().toISOString(), mode: 'explicit-pass', model: `${model.provider}/${model.id}`, usage: response.usage, inputs: batch.inputs.length,
                 sourceRefs: batch.inputs.map((i: { ref: string }) => batch.references?.[i.ref] || i.ref), contextSha256: createHash('sha256').update(protocol + '\0' + inputData).digest('hex') };
               const calls = response.content.filter(b => b.type === 'toolCall');

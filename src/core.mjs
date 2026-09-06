@@ -164,7 +164,14 @@ export function exchange(state, item) {
 }
 
 export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = false) {
-  const batch = []; let bytes = 0, oversized = 0;
+  const batch = []; let oversized = 0;
+  // The known-outcome index rides with every batch; inputs fill the room that remains.
+  const existing = state.expectations.filter(e => !compact || !e.supersededBy).map(e => compact
+    ? { id: e.id, t: e.title.slice(0, 90) }
+    : { id: e.id, title: e.title, intent: e.intent, kind: e.kind, supersededBy: e.supersededBy,
+      criteria: e.criteria.map(c => ({ id: c.id, obligation: c.obligation, check: c.check })), latestSources: e.sources.slice(-2) });
+  let bytes = Buffer.byteLength(JSON.stringify(existing));
+  if (bytes > maxBytes * 0.8) throw Error(`Expectation index (${bytes} bytes) exceeds the review budget (${maxBytes}); use a larger-context model or consolidate the catalogue`);
   const originByEntry = new Map(state.inputs.map(i => [JSON.stringify([i.entry, i.timestamp]), i.origin]));
   const pending = state.inputs.filter(i => !i.decision || i.decision.pendingIntent), missed = new Set(state.lastBatch?.missingRefs || []);
   const retry = pending.filter(i => missed.has(i.ref));
@@ -181,15 +188,9 @@ export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = fals
     if (batch.length && (batch.length === maxInputs || bytes + length > maxBytes)) break;
     batch.push(x); bytes += length;
   }
-  // A ridden turn carries a title index only; the full catalogue is reserved for explicit passes.
-  const existing = state.expectations.filter(e => !compact || !e.supersededBy).map(e => compact
-    ? { id: e.id, t: e.title.slice(0, 90) }
-    : { id: e.id, title: e.title, intent: e.intent, kind: e.kind, supersededBy: e.supersededBy,
-      criteria: e.criteria.map(c => ({ id: c.id, obligation: c.obligation, check: c.check })), latestSources: e.sources.slice(-2) });
   const references = Object.fromEntries(batch.map((x, n) => [`IN-${n + 1}`, x.ref]));
   const payload = { project: state.project, revision: state.revision, existing, references, ...(oversized ? { oversized } : {}),
     inputs: batch.map((x, n) => ({ ...x, session: x.ref.split('/')[0], ref: `IN-${n + 1}` })) };
-  if (Buffer.byteLength(JSON.stringify(payload)) > maxBytes + 70000) throw Error('Expectation index exceeds review budget; reconcile the outcome grouping before continuing');
   return payload;
 }
 
