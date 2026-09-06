@@ -361,12 +361,14 @@ export default function humanExpectations(pi: ExtensionAPI) {
         } else if (action === 'collect') {
           show(ctx, await collect(ctx, rest.length ? rest.join(' ') : undefined));
         } else if (action === 'review' || action === 'bootstrap') {
+          const file = rest.filter(w => !w.startsWith('--')).join(' ') || undefined;
+          if (file) await collect(ctx, file); // an explicit transcript is read first, so the estimate covers it
           const est = await estimate(ctx, action === 'bootstrap');
           if (rest.includes('--estimate')) { show(ctx, est.text); return; }
           if (!est.pending) { show(ctx, 'Nothing pending.'); return; }
           const go = !ctx.hasUI || rest.includes('--yes') || await ctx.ui.confirm(`Start ${action}?`, est.text);
           if (!go) { show(ctx, 'Not started.'); return; }
-          show(ctx, await explicitPass(ctx, action === 'bootstrap', rest.filter(w => !w.startsWith('--')).join(' ') || undefined));
+          show(ctx, await explicitPass(ctx, action === 'bootstrap', file));
         } else if (action === 'report') {
           const arg = rest[0];
           if (arg === 'this' || (arg && /^[0-9a-f]{8}/.test(arg) && !/^(HE|GX)-/.test(arg))) {
