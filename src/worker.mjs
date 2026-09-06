@@ -81,20 +81,21 @@ async function execute(job) {
     await unlink(path); return true;
   }
   if (job.op === 'prepare') return prepare(await load(project), job.maxInputs, job.maxBytes, job.compact);
-  if (job.op === 'prepareStructure') return consolidationInput(await load(project));
+  if (job.op === 'prepareStructure') return consolidationInput(await load(project, { sources: false }));
   if (job.op === 'source') {
     const state = await load(project), item = state.inputs.find(i => i.ref === job.ref);
     if (!item) throw Error('Unknown source'); return { item, exchange: exchange(state, item) };
   }
   if (job.op === 'report') {
     // Readers never take the writer lock; every writer already regenerates EXPECTATIONS.md on save.
-    const state = await load(project);
+    const state = await load(project, { sources: !!job.session }); // drill/summary need no sources
     const activity = job.session ? sessionActivity(state, job.session) : undefined;
     if (job.node !== undefined) return drill(state, job.node || undefined);
     return { ...summary(state), ...(activity ? { sessionActivity: activity } : {}), report: join(dir, 'EXPECTATIONS.md') };
   }
   return lock(project, '.writer-lock', async () => {
-    let state = await load(project), detail = {};
+    const needsSources = ['scan', 'apply'].includes(job.op);
+    let state = await load(project, { sources: needsSources }), detail = {};
     if (job.op === 'scan') {
       const config = await readRecord(configPath, {});
       const files = job.files || await discover(project, job.roots || []);
@@ -104,9 +105,9 @@ async function execute(job) {
         const r = await scan(state, file, config.automationPrefixes || [], config); detail.added += r.added; detail.bytes += r.bytes;
       }
       // Without authenticated sender evidence, routed/replayed text cannot become human authority.
-      for (const i of state.inputs) if (!i.decision && i.origin === 'routed-unverified') i.decision = {
+      for (const i of state.inputs) if (!i.decision && i.origin === 'routed-unverified') { state.sourcesDirty = true; i.decision = {
         origin: 'uncertain', nature: 'needs-context', reason: 'Routed/replayed sender is not authenticated as human; retained for attribution review', expectations: [],
-      };
+      }; }
       state.lastScan = new Date().toISOString(); // Advance the cadence even on an unchanged/empty scan.
       state.revision++;
     } else if (job.op === 'apply') {

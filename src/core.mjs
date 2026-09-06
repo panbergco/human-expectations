@@ -28,12 +28,24 @@ export async function readRecord(path, fallback) {
   } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; }
 }
 export const fresh = project => ({ version: 2, project, revision: 0, inputs: [], expectations: [], files: {}, runs: [], lastScan: null, lastReview: null });
-export async function load(project) {
+/**
+ * The live record (.STATE.md: expectations, evidence, structure, runs) stays small; the source log
+ * (.SOURCES.md: every captured input with context, plus transcript cursors) is loaded only when needed.
+ */
+export async function load(project, { sources = true } = {}) {
+  const dir = await safeDirectory(project);
+  let s;
   try {
-    const s = await readRecord(join(await safeDirectory(project), '.STATE.md'), fresh(project));
-    if (s.version !== 2 || s.project !== project || !Array.isArray(s.inputs) || !Array.isArray(s.expectations)) throw Error('Invalid expectation state; refusing overwrite');
-    return s;
+    s = await readRecord(join(dir, '.STATE.md'), fresh(project));
+    if (s.version !== 2 || s.project !== project || !Array.isArray(s.expectations)) throw Error('Invalid expectation state; refusing overwrite');
   } catch (e) { if (e.code === 'ENOENT') return fresh(project); throw e; }
+  if (!Array.isArray(s.inputs)) { // split layout
+    if (sources) {
+      const src = await readRecord(join(dir, '.SOURCES.md'), { inputs: [], files: {} });
+      s.inputs = src.inputs; s.files = src.files;
+    } else { s.inputs = null; s.files = s.files || {}; }
+  }
+  return s;
 }
 export async function atomic(path, content) {
   const temp = `${path}.${randomUUID()}.tmp.md`;
@@ -62,7 +74,12 @@ export async function lock(project, name, fn) {
 }
 export async function save(state) {
   const dir = directory(state.project);
-  await atomic(join(dir, '.STATE.md'), document(state));
+  const { inputs, files, sourcesDirty, ...live } = state;
+  if (Array.isArray(inputs)) {
+    live.sourceStats = sourceStats(state); live.fileHeaders = Object.fromEntries(Object.entries(files || {}).map(([k, v]) => [k, { header: v.header }]));
+    if (sourcesDirty || !(await stat(join(dir, '.SOURCES.md')).catch(() => null))) await atomic(join(dir, '.SOURCES.md'), document({ inputs, files }));
+  }
+  await atomic(join(dir, '.STATE.md'), document(live));
   const full = markdown(state);
   if (state.split) {
     const overview = full.split(/\n## HE-/)[0];
@@ -149,7 +166,7 @@ export async function scan(state, file, prefixes = [], scope = {}) {
   cursor.nodes = Object.fromEntries(Object.entries(cursor.nodes).slice(-1000));
   delete cursor.children;
   state.inputs.sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)) || a.ref.localeCompare(b.ref));
-  state.lastScan = stamp();
+  state.lastScan = stamp(); state.sourcesDirty = true;
   return { added, bytes };
 }
 
@@ -317,7 +334,7 @@ export function reconcile(state, batch, result) {
   }
   const deferred = decisions.filter(d => d.pendingIntent).map(d => d.ref);
   next.lastBatch = { requested: batch.inputs.length, judged: covered.size, missingRefs: [...new Set([...allowed].filter(ref => !covered.has(ref)).concat(deferred))] };
-  next.revision++; next.lastReview = stamp();
+  next.revision++; next.lastReview = stamp(); next.sourcesDirty = true;
   return next;
 }
 
@@ -352,16 +369,22 @@ export function record(state, update) {
   next.revision++; return next;
 }
 
-export function summary(state) {
-  const originCounts = {}, verdicts = { passed: 0, failed: 0, blocked: 0, unknown: 0 };
+export function sourceStats(state) {
+  const originCounts = {};
   for (const i of state.inputs) { const label = i.decision?.origin || i.origin; originCounts[label] = (originCounts[label] || 0) + 1; }
-  for (const e of state.expectations.filter(e => !e.supersededBy && e.kind === 'outcome')) for (const c of e.criteria) verdicts[c.verdict]++;
-  return { revision: state.revision, inputs: state.inputs.length, pending: state.inputs.filter(i => !i.decision || i.decision.pendingIntent).length,
+  return { inputs: state.inputs.length, pending: state.inputs.filter(i => !i.decision || i.decision.pendingIntent).length,
     needsContext: state.inputs.filter(i => i.decision?.nature === 'needs-context' || i.decision?.origin === 'uncertain' || i.decision?.needsReview).length,
+    originCounts, sessions: new Set(Object.values(state.files || {}).map(f => f.header?.id).filter(Boolean)).size, sourceFiles: Object.keys(state.files || {}).length };
+}
+export function summary(state) {
+  const st = Array.isArray(state.inputs) ? sourceStats(state) : (state.sourceStats || { inputs: 0, pending: 0, needsContext: 0, originCounts: {}, sessions: 0, sourceFiles: 0 });
+  const verdicts = { passed: 0, failed: 0, blocked: 0, unknown: 0 };
+  for (const e of state.expectations.filter(e => !e.supersededBy && e.kind === 'outcome')) for (const c of e.criteria) verdicts[c.verdict]++;
+  return { revision: state.revision, inputs: st.inputs, pending: st.pending, needsContext: st.needsContext,
     unverifiedProposals: state.unverifiedProposals?.length || 0,
     expectations: state.expectations.length, outcomeGroups: rollups(state).length,
-    sessions: new Set(Object.values(state.files).map(f => f.header?.id).filter(Boolean)).size, sourceFiles: Object.keys(state.files).length,
-    originCounts, verdicts, lastScan: state.lastScan, lastReview: state.lastReview, lastError: state.lastError || null,
+    sessions: st.sessions, sourceFiles: st.sourceFiles,
+    originCounts: st.originCounts, verdicts, lastScan: state.lastScan, lastReview: state.lastReview, lastError: state.lastError || null,
     lastBatch: state.lastBatch || null,
     recordedCost: state.runs.reduce((n, r) => n + (r.usage?.cost?.total || 0), 0), modelCalls: state.runs.length };
 }

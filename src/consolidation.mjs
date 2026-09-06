@@ -12,7 +12,7 @@ export function consolidationInput(state) {
     criteria: e.criteria.map(c => ({ id: c.id, obligation: c.obligation })),
   }));
   const digest = createHash('sha256').update(JSON.stringify(expectations)).digest('hex');
-  const pending = state.inputs.some(i => !i.decision || i.decision.pendingIntent);
+  const pending = Array.isArray(state.inputs) ? state.inputs.some(i => !i.decision || i.decision.pendingIntent) : (state.sourceStats?.pending || 0) > 0;
   return { revision: state.revision, digest, needed: !pending && expectations.length > 7 && state.structureDigest !== digest,
     expectations, previousStructure: state.structure || null };
 }
