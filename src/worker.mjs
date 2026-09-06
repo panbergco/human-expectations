@@ -96,7 +96,7 @@ async function execute(job) {
     if (lease?.token !== job.token) throw Error('Cannot release another reviewer’s lock');
     await unlink(path); return true;
   }
-  if (job.op === 'prepare') return prepare(await load(project), job.maxInputs, job.maxBytes, job.compact);
+  if (job.op === 'prepare') return prepare(await load(project), job.maxInputs, job.maxBytes, job.compact, job.since);
   if (job.op === 'prepareStructure') return consolidationInput(await load(project, { sources: false }));
   if (job.op === 'source') {
     const state = await load(project), item = state.inputs.find(i => i.ref === job.ref);

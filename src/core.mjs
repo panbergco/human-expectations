@@ -192,7 +192,7 @@ export function exchange(state, item) {
     before, after, contextPending: after.length === 0 };
 }
 
-export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = false) {
+export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = false, since = null) {
   const batch = []; let oversized = 0;
   // The known-outcome index rides with every batch; inputs fill the room that remains.
   const full = e => ({ id: e.id, title: e.title, intent: e.intent, kind: e.kind, supersededBy: e.supersededBy,
@@ -213,7 +213,7 @@ export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = fals
   if (compact ? indexBytes > 40000 : indexBytes > maxBytes * 0.8) throw Error(`Expectation index (${indexBytes} bytes) exceeds the review budget (${maxBytes}); use a larger-context model or consolidate the catalogue`);
   let bytes = compact ? 0 : indexBytes;
   const originByEntry = new Map(state.inputs.map(i => [JSON.stringify([i.entry, i.timestamp]), i.origin]));
-  const pending = state.inputs.filter(i => !i.decision || i.decision.pendingIntent), missed = new Set(state.lastBatch?.missingRefs || []);
+  const pending = state.inputs.filter(i => (!i.decision || i.decision.pendingIntent) && (!since || i.timestamp >= since)), missed = new Set(state.lastBatch?.missingRefs || []);
   const retry = pending.filter(i => missed.has(i.ref));
   for (const i of (retry.length ? retry : pending)) {
     // Routed messages need attribution, not extraction of requirements allegedly spoken by an agent.

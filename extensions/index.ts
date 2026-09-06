@@ -232,7 +232,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
     const dir = join(project(ctx), '.human-expectations'); await mkdir(dir, { recursive: true, mode: 0o700 });
     await appendFile(join(dir, 'BACKFILL.md'), (header ? `\n# Backfill ${new Date().toISOString()}\n\n| batch | inputs left | expectations | cost so far | elapsed |\n|---|---|---|---|---|\n` : '') + line + '\n', { mode: 0o600 });
   }
-  async function explicitPass(ctx: ExtensionContext, bootstrap: boolean, file?: string) {
+  async function explicitPass(ctx: ExtensionContext, bootstrap: boolean, file?: string, since?: string) {
     if (active) throw Error('Expectation update already running in this session');
     controller = new AbortController();
     const abort = controller;
@@ -252,7 +252,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
         for (let batchNumber = 0; batchNumber < (bootstrap ? 400 : 1); batchNumber++) {
           if (abort.signal.aborted || stopped) break;
           progress(`expectations ${bootstrap ? 'backfill' : 'review'}: batch ${batchNumber + 1} · ${status.pending} pending of ${startedPending} · $${((status.recordedCost || 0) - startedCost).toFixed(2)} · ${Math.round((Date.now() - startedAt) / 60000)} min`);
-          const batch = await job(ctx, { op: 'prepare', ...(bootstrap ? { maxInputs: 120, maxBytes: Math.min(650000, Math.floor((model.contextWindow || 128000) * 0.6)) } : {}) });
+          const batch = await job(ctx, { op: 'prepare', since, ...(bootstrap ? { maxInputs: 120, maxBytes: Math.min(650000, Math.floor((model.contextWindow || 128000) * 0.6)) } : {}) });
           if (!batch.inputs.length) break;
           const { references: _references, ...reviewInput } = batch;
           let repair: { validationError: string; rejectedOutput: string } | undefined;
@@ -327,7 +327,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
       const words = prefix.split(/\s+/);
       if (words.length > 1) {
         const verb = words[0], tail = words.at(-1) || '';
-        const options = (verb === 'report' ? ['this', 'full', 'recheck', '--project'] : verb === 'on' ? ['--global', '--project', '--budget', '30', '60'] : verb === 'off' ? ['--global', '--project'] : verb === 'bootstrap' || verb === 'review' ? ['--estimate', '--yes', '--project'] : ['--project']);
+        const options = (verb === 'report' ? ['this', 'full', 'recheck', '--project'] : verb === 'on' ? ['--global', '--project', '--budget', '30', '60'] : verb === 'off' ? ['--global', '--project'] : verb === 'bootstrap' || verb === 'review' ? ['--estimate', '--yes', '--since', '--project'] : ['--project']);
         const items = options.filter(o => o.startsWith(tail)).map(o => ({ value: `${words.slice(0, -1).join(' ')} ${o}`, label: o }));
         return items.length ? items : null;
       }
@@ -378,6 +378,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
         } else if (action === 'collect') {
           show(ctx, await collect(ctx, rest.length ? rest.join(' ') : undefined));
         } else if (action === 'review' || action === 'bootstrap') {
+          const si = rest.indexOf('--since'); const since = si >= 0 ? new Date(rest.splice(si, 2)[1]).toISOString() : undefined;
           const file = rest.filter(w => !w.startsWith('--')).join(' ') || undefined;
           if (file) await collect(ctx, file); // an explicit transcript is read first, so the estimate covers it
           const est = await estimate(ctx, action === 'bootstrap');
@@ -385,7 +386,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
           if (!est.pending) { show(ctx, 'Nothing pending.'); return; }
           const go = !ctx.hasUI || rest.includes('--yes') || await ctx.ui.confirm(`Start ${action}?`, est.text);
           if (!go) { show(ctx, 'Not started.'); return; }
-          show(ctx, await explicitPass(ctx, action === 'bootstrap', file));
+          show(ctx, await explicitPass(ctx, action === 'bootstrap', file, since));
         } else if (action === 'report') {
           const arg = rest[0];
           if (arg === 'this' || (arg && /^[0-9a-f]{8}/.test(arg) && !/^(HE|GX)-/.test(arg))) {
