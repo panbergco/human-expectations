@@ -210,6 +210,22 @@ export default function humanExpectations(pi: ExtensionAPI) {
   });
 
   // ---- Explicit, user-invoked passes. These DO make separate model requests and say so. ----
+  async function estimate(ctx: ExtensionContext, bootstrap: boolean) {
+    const model = ctx.model; if (!model) throw Error('Select a model before estimating');
+    const status = await job(ctx, { op: 'status' });
+    const batch = await job(ctx, { op: 'prepare', ...(bootstrap ? { maxInputs: 120, maxBytes: Math.min(650000, Math.floor((model.contextWindow || 128000) * 0.6)) } : {}) });
+    const perBatch = Math.max(1, batch.inputs.length), bytes = Buffer.byteLength(JSON.stringify(batch));
+    const batches = bootstrap ? Math.ceil(status.pending / perBatch) : Math.min(1, status.pending);
+    const inTokens = Math.round(bytes / 4) * batches, outTokens = Math.round(perBatch * 180) * batches;
+    const cost = model.cost ? (inTokens * (model.cost.input || 0) + outTokens * (model.cost.output || 0)) / 1e6 : null;
+    return { pending: status.pending, perBatch, batches, inputTokens: inTokens, outputTokens: outTokens, estimatedCost: cost, estimatedMinutes: Math.round(batches * 2.5),
+      text: `${status.pending} pending inputs → ${batches} request(s) of ~${perBatch} inputs on ${model.provider}/${model.id}; ~${Math.round(inTokens / 1000)}k input + ~${Math.round(outTokens / 1000)}k output tokens; ${cost === null ? 'cost unknown for this model' : `about $${cost.toFixed(2)}`} (subscription accounts: quota, not dollars); ~${Math.round(batches * 2.5)} min. Estimates carry ±30%.` };
+  }
+  async function ledger(ctx: ExtensionContext, line: string, header = false) {
+    const { mkdir, appendFile } = await import('node:fs/promises');
+    const dir = join(project(ctx), '.human-expectations'); await mkdir(dir, { recursive: true, mode: 0o700 });
+    await appendFile(join(dir, 'BACKFILL.md'), (header ? `\n# Backfill ${new Date().toISOString()}\n\n| batch | inputs left | expectations | cost so far | elapsed |\n|---|---|---|---|---|\n` : '') + line + '\n', { mode: 0o600 });
+  }
   async function explicitPass(ctx: ExtensionContext, bootstrap: boolean, file?: string) {
     if (active) throw Error('Expectation update already running in this session');
     controller = new AbortController();
@@ -225,7 +241,8 @@ export default function humanExpectations(pi: ExtensionAPI) {
         if (!model) throw Error('Select a model before extracting intent');
         const progress = (text: string) => { if (ctx.hasUI) ctx.ui.setStatus('human-expectations', text); };
         const startedPending = status.pending, startedAt = Date.now(), startedCost = status.recordedCost || 0;
-        if (ctx.hasUI) ctx.ui.notify(`Explicit ${bootstrap ? 'backfill' : 'review'} started: ${status.pending} pending inputs. Progress shows in the status line; sources stay safe if you stop.`, 'info');
+        if (ctx.hasUI) ctx.ui.notify(`Explicit ${bootstrap ? 'backfill' : 'review'} started: ${status.pending} pending inputs. Live ledger: .human-expectations/BACKFILL.md; progress in the status line; sources stay safe if you stop.`, 'info');
+        await ledger(ctx, `| 0 | ${status.pending} | ${status.expectations} | $0.00 | 0 min |`, true);
         for (let batchNumber = 0; batchNumber < (bootstrap ? 400 : 1); batchNumber++) {
           if (abort.signal.aborted || stopped) break;
           progress(`expectations ${bootstrap ? 'backfill' : 'review'}: batch ${batchNumber + 1} · ${status.pending} pending of ${startedPending} · $${((status.recordedCost || 0) - startedCost).toFixed(2)} · ${Math.round((Date.now() - startedAt) / 60000)} min`);
@@ -248,6 +265,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
               const result = decodeOutput(text);
               if (abort.signal.aborted || stopped) throw Error('Extraction cancelled; sources remain pending');
               status = await job(ctx, { op: 'apply', batch, result, run });
+              await ledger(ctx, `| ${batchNumber + 1} | ${status.pending} | ${status.expectations} | $${((status.recordedCost || 0) - startedCost).toFixed(2)} | ${Math.round((Date.now() - startedAt) / 60000)} min |`);
               break;
             } catch (error) {
               await job(ctx, { op: 'error', message: String(error), run, rejectedOutput: text });
@@ -258,6 +276,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
         }
         if (!abort.signal.aborted && !stopped && status.pending === 0) { progress('expectations: consolidating the outcome hierarchy'); status = await consolidateExplicit(ctx, abort.signal) || status; }
         progress(undefined as any);
+        await ledger(ctx, `| done | ${status.pending} | ${status.expectations} | $${((status.recordedCost || 0) - startedCost).toFixed(2)} | ${Math.round((Date.now() - startedAt) / 60000)} min |`);
         return { done: `${startedPending - status.pending} inputs processed in ${Math.round((Date.now() - startedAt) / 60000)} min, $${((status.recordedCost || 0) - startedCost).toFixed(2)} reported; ${status.pending} pending remain`, ...status };
       } catch (error) {
         if (claimed) await job(ctx, { op: 'error', message: String(error) }).catch(() => {});
@@ -302,7 +321,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
       const words = prefix.split(/\s+/);
       if (words.length > 1) {
         const verb = words[0], tail = words.at(-1) || '';
-        const options = (verb === 'report' ? ['this', '--project'] : verb === 'on' ? ['--global', '--project', '30', '60'] : verb === 'off' ? ['--global', '--project'] : ['--project']);
+        const options = (verb === 'report' ? ['this', 'full', '--project'] : verb === 'on' ? ['--global', '--project', '30', '60'] : verb === 'off' ? ['--global', '--project'] : verb === 'bootstrap' || verb === 'review' ? ['--estimate', '--yes', '--project'] : ['--project']);
         const items = options.filter(o => o.startsWith(tail)).map(o => ({ value: `${words.slice(0, -1).join(' ')} ${o}`, label: o }));
         return items.length ? items : null;
       }
@@ -342,7 +361,12 @@ export default function humanExpectations(pi: ExtensionAPI) {
         } else if (action === 'collect') {
           show(ctx, await collect(ctx, rest.length ? rest.join(' ') : undefined));
         } else if (action === 'review' || action === 'bootstrap') {
-          show(ctx, await explicitPass(ctx, action === 'bootstrap', rest.length ? rest.join(' ') : undefined));
+          const est = await estimate(ctx, action === 'bootstrap');
+          if (rest.includes('--estimate')) { show(ctx, est.text); return; }
+          if (!est.pending) { show(ctx, 'Nothing pending.'); return; }
+          const go = !ctx.hasUI || rest.includes('--yes') || await ctx.ui.confirm(`Start ${action}?`, est.text);
+          if (!go) { show(ctx, 'Not started.'); return; }
+          show(ctx, await explicitPass(ctx, action === 'bootstrap', rest.filter(w => !w.startsWith('--')).join(' ') || undefined));
         } else if (action === 'report') {
           const arg = rest[0];
           if (arg === 'this' || (arg && /^[0-9a-f]{8}/.test(arg) && !/^(HE|GX)-/.test(arg))) {

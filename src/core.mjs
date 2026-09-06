@@ -178,10 +178,19 @@ export function exchange(state, item) {
 export function prepare(state, maxInputs = 48, maxBytes = 110000, compact = false) {
   const batch = []; let oversized = 0;
   // The known-outcome index rides with every batch; inputs fill the room that remains.
-  const existing = state.expectations.filter(e => !compact || !e.supersededBy).map(e => compact
-    ? { id: e.id, t: e.title.slice(0, 90) }
-    : { id: e.id, title: e.title, intent: e.intent, kind: e.kind, supersededBy: e.supersededBy,
-      criteria: e.criteria.map(c => ({ id: c.id, obligation: c.obligation, check: c.check })), latestSources: e.sources.slice(-2) });
+  const full = e => ({ id: e.id, title: e.title, intent: e.intent, kind: e.kind, supersededBy: e.supersededBy,
+    criteria: e.criteria.map(c => ({ id: c.id, obligation: c.obligation, check: c.check })), latestSources: e.sources.slice(-2) });
+  const brief = e => ({ id: e.id, t: e.title.slice(0, 90) });
+  let existing = state.expectations.filter(e => !compact || !e.supersededBy).map(compact ? brief : full);
+  // Explicit passes on a large catalogue: full detail only for the ~20 expectations most related to this batch, titles for the rest.
+  if (!compact && existing.length > 40) {
+    const words = text => new Set(String(text).toLowerCase().match(/[a-z]{4,}/g) || []);
+    existing = state.expectations.map(e => ({ e, score: 0 }));
+    const pendingWords = state.inputs.filter(i => !i.decision || i.decision.pendingIntent).slice(0, maxInputs).map(i => words(i.text));
+    for (const row of existing) { const w = words(row.e.title + ' ' + row.e.intent); for (const pw of pendingWords) for (const x of pw) if (w.has(x)) row.score++; }
+    const top = new Set(existing.sort((a, b) => b.score - a.score).slice(0, 20).map(r => r.e.id));
+    existing = state.expectations.map(e => top.has(e.id) ? full(e) : { ...brief(e), kind: e.kind, criteria: e.criteria.map(c => c.id) });
+  }
   const indexBytes = Buffer.byteLength(JSON.stringify(existing));
   // A ridden turn carries the title index within its own allowance; inputs use maxBytes on top of it.
   if (compact ? indexBytes > 40000 : indexBytes > maxBytes * 0.8) throw Error(`Expectation index (${indexBytes} bytes) exceeds the review budget (${maxBytes}); use a larger-context model or consolidate the catalogue`);
