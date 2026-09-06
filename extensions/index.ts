@@ -9,7 +9,7 @@ import { StringEnum } from '@earendil-works/pi-ai';
 import { truncateHead, withFileMutationQueue, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { runJob } from '../src/jobs.mjs';
 import { decodeOutput } from '../src/output.mjs';
-import { consolidationPrompt } from '../src/consolidation.mjs';
+import { consolidationPrompt, tidyPrompt } from '../src/consolidation.mjs';
 import { rideInstruction, extractRide, hideRide } from '../src/ride.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -295,7 +295,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
   const VERBS: Record<string, string> = {
     on: 'enable for this project (add --global for all projects)', off: 'disable here (wins over global)', status: 'intake, pending, rides, cost',
     report: 'outcome overview; report this|<session-id> for one session', collect: 'read new transcript text, no inference',
-    audit: 'drive the checks of an outcome/expectation against the project and record evidence (starts a turn)', bootstrap: 'explicit paid pass over pending history', review: 'explicit paid pass, one batch', split: 'overview + linked detail files', single: 'one report file',
+    tidy: 'explicit paid pass: propose merges of duplicate outcomes and splits of compound checks; you approve before anything changes', audit: 'drive the checks of an outcome/expectation against the project and record evidence (starts a turn)', bootstrap: 'explicit paid pass over pending history', review: 'explicit paid pass, one batch', split: 'overview + linked detail files', single: 'one report file',
   };
   const command = {
     getArgumentCompletions: (prefix: string) => {
@@ -366,6 +366,23 @@ export default function humanExpectations(pi: ExtensionAPI) {
             '', ...targets.map((t: any) => `## ${t.id} — ${t.title}\n${t.intent}\n` + t.checks.map((c: any) => `- ${c.id} [${c.verdict}] ${c.obligation}`).join('\n')),
           ].join('\n');
           pi.sendMessage({ customType: 'human-expectations:audit', content: brief, display: true }, { triggerTurn: true });
+        } else if (action === 'tidy') {
+          const model = ctx.model; if (!model) throw Error('Select a model');
+          const view = await job(ctx, { op: 'report' }); void view;
+          const catalogue = await job(ctx, { op: 'prepareStructure' });
+          const content = JSON.stringify({ expectations: catalogue.expectations });
+          if (ctx.hasUI) ctx.ui.notify(`Tidy review: ${catalogue.expectations.length} expectations, one explicit model request (${Math.round(Buffer.byteLength(content) / 1000)} KB).`, 'info');
+          const response = await ctx.modelRegistry.complete(model, { systemPrompt: tidyPrompt, messages: [{ role: 'user', content, timestamp: Date.now() }] }, { signal: AbortSignal.timeout(600000), maxTokens: Math.min(16000, model.maxTokens || 16000), reasoningEffort: 'low', sessionId: randomUUID() });
+          const text = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+          const proposal = decodeOutput(text);
+          const merges = proposal.merges || [], splits = proposal.splits || [];
+          const summary = [`Proposed: ${merges.length} merges, ${splits.length} splits, ${(proposal.leave || []).length} left as is.`, '',
+            ...merges.map((m: any) => `MERGE ${m.absorb?.join(', ')} → ${m.keep}: ${m.reason}`), ...splits.map((sp: any) => `SPLIT ${sp.check} → ${sp.into?.length} obligations: ${sp.reason}`)].join('\n');
+          show(ctx, summary);
+          const ok = ctx.hasUI ? await ctx.ui.confirm('Apply this tidy proposal?', `${merges.length} merges and ${splits.length} splits. Sources and history are kept; nothing is deleted.`) : false;
+          if (!ok) { show(ctx, 'Tidy proposal not applied.'); return; }
+          const status = await job(ctx, { op: 'status' });
+          show(ctx, await job(ctx, { op: 'tidy', revision: status.revision, proposal, run: { id: randomUUID(), at: new Date().toISOString(), kind: 'tidy', mode: 'explicit-pass', model: `${model.provider}/${model.id}`, usage: response.usage } }));
         } else if (action === 'split' || action === 'single') {
           show(ctx, await job(ctx, { op: 'layout', split: action === 'split' }));
         } else if (action === 'status') {

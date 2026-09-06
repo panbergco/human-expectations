@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { directory, document, load, lock, save, scan, prepare, reconcile, record, summary, exchange, safeDirectory, readRecord, atomic } from './core.mjs';
 import { setStructure, drill } from './structure.mjs';
 import { sessionActivity } from './activity.mjs';
-import { consolidationInput } from './consolidation.mjs';
+import { consolidationInput, applyTidy } from './consolidation.mjs';
 
 async function writeRecord(path, value) {
   await atomic(path, document(value));
@@ -132,6 +132,11 @@ async function execute(job) {
     else if (job.op === 'layout') {
       if (job.split && state.expectations.length > 7 && !state.structure) throw Error('Create a reviewed 3–7-member outcome hierarchy before splitting this large report');
       state.split = job.split; state.revision++;
+    }
+    else if (job.op === 'tidy') {
+      if (job.revision !== state.revision) throw Error('Stale tidy');
+      state = applyTidy(state, job.proposal);
+      if (job.run) state.runs.push(job.run);
     }
     else if (job.op === 'structure') {
       if (job.revision !== state.revision) throw Error('Stale structure update');
