@@ -102,8 +102,16 @@ export default function humanExpectations(pi: ExtensionAPI) {
     if (current && !applied) rides.missed++;
     if (current) await job(ctx, { op: 'release', token: current.token }).catch(() => {});
   }
+  let configChecked = 0;
   async function armRide(ctx: ExtensionContext) {
-    if (!enabled || ride || active || stopped) return;
+    if (ride || active || stopped) return;
+    // Activation is read from the project, not from a flag set at start-up: enabling it in another
+    // session (or in a headless run) takes effect on the next turn without a restart.
+    if (!enabled && Date.now() - configChecked > 30000) {
+      configChecked = Date.now();
+      enabled = !!(await job(ctx, { op: 'status' }).catch(() => ({ enabled: false }))).enabled;
+    }
+    if (!enabled) return;
     // Never ride a turn that is already near the context limit.
     try { const u = ctx.getContextUsage?.(); const pct = u?.percent ?? (u?.tokens && ctx.model?.contextWindow ? 100 * u.tokens / ctx.model.contextWindow : 0); if (pct > 80) return; } catch {}
     const token = randomUUID();
