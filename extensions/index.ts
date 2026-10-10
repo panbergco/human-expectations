@@ -23,7 +23,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
   let controller: AbortController | undefined;
   const watchers: FSWatcher[] = [];
   // The bookkeeping riding the current turn, if any. Cleared when applied, when the turn settles, or on abort.
-  let ride: { kind: 'inputs' | 'structure'; token: string; text: string; batch?: any; input?: any; started: number } | undefined;
+  let ride: { kind: 'inputs' | 'structure'; token: string; text: string; batch?: any; input?: any; started: number; anchor?: { index: number; key: string } } | undefined;
   // Session-local observability for the ridden channel: how often it was armed, carried, answered, applied.
   const rides = { armed: 0, carried: 0, answered: 0, applied: 0, rejected: 0, missed: 0 };
 
@@ -100,7 +100,7 @@ export default function humanExpectations(pi: ExtensionAPI) {
   async function releaseRide(ctx: ExtensionContext, applied = false) {
     const current = ride; ride = undefined;
     if (current && !applied) rides.missed++;
-    if (current) await job(ctx, { op: 'release', token: current.token }).catch(() => {});
+    if (current) try { await job(ctx, { op: 'release', token: current.token }); } catch { /* shutdown must never throw */ }
   }
   let configChecked = 0;
   async function armRide(ctx: ExtensionContext) {
@@ -186,17 +186,25 @@ export default function humanExpectations(pi: ExtensionAPI) {
     }).catch(() => {});
   });
   pi.on('before_agent_start', async (_event, ctx) => { await armRide(ctx).catch(() => {}); });
+  // The note is pinned to the message it first rode and stays there for the rest of the run.
+  // Moving it to each new last message would change an already-cached message on every request,
+  // so the provider's prompt cache would miss and rewrite the whole conversation each time.
+  const messageKey = (m: any) => JSON.stringify([m.role, m.timestamp, m.toolCallId ?? null]);
   pi.on('context', (event) => {
     if (!ride) return;
-    const last = event.messages.at(-1);
-    if (!last) return;
-    // Appended to the tail only: the cached prefix of the conversation is untouched and nothing is persisted.
-    // Never mutate the live message object: replace the tail with a copy that carries the note.
-    const content = typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : [...(last.content as any[])];
+    const messages = event.messages;
+    if (!messages.length) return;
+    if (ride.anchor === undefined) ride.anchor = { index: messages.length - 1, key: messageKey(messages.at(-1)) };
+    let at = messages[ride.anchor.index] && messageKey(messages[ride.anchor.index]) === ride.anchor.key
+      ? ride.anchor.index : messages.findIndex(m => messageKey(m) === ride!.anchor!.key);
+    if (at < 0) return; // the anchor was compacted away: carry nothing rather than move the note
+    ride.anchor.index = at;
+    const target = messages[at] as any;
+    // Never mutate the live message object: replace it with a copy that carries the note.
+    const content = typeof target.content === 'string' ? [{ type: 'text', text: target.content }] : [...(target.content as any[])];
     content.push({ type: 'text', text: ride.text });
-    const messages = [...event.messages.slice(0, -1), { ...(last as any), content }];
     rides.carried++;
-    return { messages };
+    return { messages: messages.map((m, i) => i === at ? { ...target, content } : m) };
   });
   pi.on('message_end', async (event, ctx) => {
     mark(ctx); // Observer only.

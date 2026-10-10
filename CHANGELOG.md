@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 — 2026-10-08
+
+- Fix: the bookkeeping note moved to each new last message, so every request in a ridden run missed the prompt cache and rewrote the conversation. The note now stays on the message it first rode; measured on a real provider: later requests write only their new content (56 tokens) instead of the growing run.
+- Release of a held ride never throws during shutdown.
+
 ## 0.2.0 — 2026-09-07
 
 - Bookkeeping rides turns you already started; it never starts a model request of its own (probe + real providers).
